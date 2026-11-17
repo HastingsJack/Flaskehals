@@ -27,6 +27,7 @@ from flaskehals.tasks import (
     fetch_tasks,
     save_approved_task,
 )
+from flaskehals.theme import apply_background
 
 AUTH_KEY = "authenticated"
 ERROR_KEY = "login_error"
@@ -137,6 +138,7 @@ def render_app() -> None:
 def main() -> None:
     # Load a local .env if present. Real environment variables take precedence.
     load_dotenv()
+    apply_background()
 
     # Re-check config on every run: if it disappears, existing sessions lose
     # access too. Show no login form at all when it's missing.
