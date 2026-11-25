@@ -84,8 +84,22 @@ def open_task_page() -> AppTest:
     return go_to(at, "New task")
 
 
+PAGE_PATHS = {"Dashboard": "", "New task": "new-task", "Tasks": "tasks"}
+
+
 def go_to(at: AppTest, page: str) -> AppTest:
-    return at.radio(key="page").set_value(page).run()
+    """Open a page by URL path.
+
+    AppTest.switch_page only takes file paths, so for callable st.navigation
+    pages we select the registered page hash directly.
+    """
+    path = PAGE_PATHS[page]
+    at._page_hash = next(
+        h
+        for h, info in at._registered_pages.items()
+        if info.get("url_pathname") == path
+    )
+    return at.run()
 
 
 def fill(

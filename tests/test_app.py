@@ -115,3 +115,59 @@ def test_existing_session_denied_if_configuration_removed(
     at.run()
     assert not on_dashboard(at)
     assert "authenticated" not in at.session_state
+
+
+# --- features/userinterface/page-navigation.feature ---
+
+
+def open_page(at: AppTest, url_path: str) -> AppTest:
+    """Open a page by URL path (AppTest.switch_page only supports file pages)."""
+    at._page_hash = next(
+        h
+        for h, info in at._registered_pages.items()
+        if info.get("url_pathname") == url_path
+    )
+    return at.run()
+
+
+@pytest.mark.usefixtures("auth_env")
+def test_navigation_lists_all_pages_and_no_radio() -> None:
+    at = log_in(run_app())
+    titles = [info.get("page_name") for info in at._registered_pages.values()]
+    assert titles == ["Dashboard", "New task", "Tasks"]
+    assert not at.radio
+
+
+@pytest.mark.usefixtures("auth_env")
+def test_dashboard_is_default_page() -> None:
+    at = log_in(run_app())
+    assert on_dashboard(at)
+
+
+@pytest.mark.usefixtures("auth_env")
+def test_each_page_has_its_own_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("flaskehals.tasks.fetch_tasks", lambda *a: [])
+    at = log_in(run_app())
+    at = open_page(at, "new-task")
+    assert not on_dashboard(at)
+    assert at.text_input(key="task_title")
+    at = open_page(at, "tasks")
+    assert [i.value for i in at.info] == ["No approved tasks yet."]
+    at = open_page(at, "")
+    assert on_dashboard(at)
+
+
+@pytest.mark.usefixtures("auth_env")
+def test_log_out_available_on_every_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("flaskehals.tasks.fetch_tasks", lambda *a: [])
+    at = log_in(run_app())
+    for path in ("new-task", "tasks", ""):
+        at = open_page(at, path)
+        assert any(b.label == "Log out" for b in at.sidebar.button)
+
+
+@pytest.mark.usefixtures("auth_env")
+def test_pages_require_authentication() -> None:
+    at = run_app()
+    assert not at._registered_pages or not at.sidebar.button
+    assert on_login_page(at)

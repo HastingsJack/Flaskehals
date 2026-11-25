@@ -39,11 +39,6 @@ NEO4J_CONFIG_ERROR_MESSAGE = (
     "Neo4j is not configured. Set NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD."
 )
 NEO4J_UNAVAILABLE_MESSAGE = "Could not reach Neo4j. Is it running?"
-PAGE_KEY = "page"
-DASHBOARD_PAGE = "Dashboard"
-NEW_TASK_PAGE = "New task"
-TASKS_PAGE = "Tasks"
-PAGES = (DASHBOARD_PAGE, NEW_TASK_PAGE, TASKS_PAGE)
 
 
 @st.cache_resource
@@ -119,20 +114,32 @@ def render_dashboard() -> None:
         render_developer_overview(developers)
 
 
+def render_new_task() -> None:
+    render_task_creation(build_task_services())
+
+
+def render_tasks() -> None:
+    render_task_overview(build_task_services())
+
+
+def build_pages() -> list[st.Page]:
+    """The single definition of the application's pages: titles and URL paths."""
+    return [
+        st.Page(
+            render_dashboard, title="Dashboard", url_path="dashboard", default=True
+        ),
+        st.Page(render_new_task, title="New task", url_path="new-task"),
+        st.Page(render_tasks, title="Tasks", url_path="tasks"),
+    ]
+
+
 def render_app() -> None:
-    if st.button("Log out"):
+    page = st.navigation(build_pages())
+    if st.sidebar.button("Log out"):
         st.session_state.clear()
         st.rerun()
-    page = st.radio(
-        "Page", PAGES, key=PAGE_KEY, horizontal=True, label_visibility="collapsed"
-    )
     keep_draft_state()
-    if page == NEW_TASK_PAGE:
-        render_task_creation(build_task_services())
-    elif page == TASKS_PAGE:
-        render_task_overview(build_task_services())
-    else:
-        render_dashboard()
+    page.run()
 
 
 def main() -> None:
