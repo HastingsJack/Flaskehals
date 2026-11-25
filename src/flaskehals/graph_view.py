@@ -6,7 +6,7 @@ functions so they can be tested without a browser.
 
 from streamlit_agraph import Config, Edge, Node
 
-from flaskehals.developers import DeveloperGraph, GraphNode
+from flaskehals.developer_graph import DeveloperGraph, GraphNode
 
 # One fixed colour per node label (similar in spirit to the Neo4j Browser).
 LABEL_COLORS: dict[str, str] = {

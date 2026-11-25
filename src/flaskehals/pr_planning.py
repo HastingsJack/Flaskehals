@@ -1,4 +1,4 @@
-"""Plan the labels and reviewer for a pull request opened for a task.
+"""Decide the reviewer for a pull request opened for a task, and the label changes.
 
 features/githubsync/pull-request-task-assignment.feature
 
@@ -12,15 +12,15 @@ experience level), and the task's own developer is never recommended.
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from flaskehals.assignment import (
+from flaskehals.developer_scoring import (
     AssignmentResult,
     DeveloperProfile,
     recommend_developer,
 )
 from flaskehals.github import PullRequest
 from flaskehals.interpretation import DEVELOPER_PREFIX, REVIEWER_PREFIX
+from flaskehals.models import Task
 from flaskehals.task_numbers import task_for_branch
-from flaskehals.tasks import Task
 
 
 @dataclass(frozen=True)
@@ -36,19 +36,13 @@ class PullRequestPlan:
     developer: str
     reviewer: str | None  # None when no suitable reviewer was found
     assignment: AssignmentResult  # scores and reasoning for every candidate
-    add_labels: tuple[str, ...]
-    remove_labels: tuple[str, ...]
-
-
-def _has_prefix(label: str, prefix: str) -> bool:
-    return label.lower().startswith(prefix)
 
 
 def _label_changes(
     current: Iterable[str], prefix: str, wanted: str
 ) -> tuple[list[str], list[str]]:
     """Labels to add and remove so ``wanted`` is the only label with ``prefix``."""
-    existing = [label for label in current if _has_prefix(label, prefix)]
+    existing = [label for label in current if label.lower().startswith(prefix)]
     add = [] if wanted in existing else [wanted]
     remove = [label for label in existing if label != wanted]
     return add, remove
@@ -95,14 +89,9 @@ def plan_pull_request(
     assignment = recommend_developer(
         profiles, task.title, task.specification, exclude=developer
     )
-    reviewer = assignment.recommended
-
-    add, remove = label_changes(pr.labels, developer, reviewer)
     return PullRequestPlan(
         task=task,
         developer=developer,
-        reviewer=reviewer,
+        reviewer=assignment.recommended,
         assignment=assignment,
-        add_labels=add,
-        remove_labels=remove,
     )

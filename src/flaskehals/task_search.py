@@ -6,8 +6,8 @@ are loaded, so the search text never reaches a database query.
 
 from collections.abc import Sequence
 
+from flaskehals.models import Task
 from flaskehals.task_numbers import parse_number_query
-from flaskehals.tasks import Task
 
 MAX_QUERY_LENGTH = 100
 

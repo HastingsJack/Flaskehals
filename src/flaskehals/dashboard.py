@@ -6,9 +6,10 @@ from html import escape
 import streamlit as st
 from streamlit_agraph import agraph
 
-from flaskehals.developers import DeveloperGraph, DeveloperOverview, resolve_picture
+from flaskehals.db import DataStoreError
+from flaskehals.developer_graph import DeveloperGraph
+from flaskehals.developers import DeveloperOverview, resolve_picture
 from flaskehals.graph_view import build_agraph, graph_legend, label_color
-from flaskehals.tasks import DataStoreError
 
 EMPTY_MESSAGE = "No developers found. Run the GitHub sync to import them."
 TASKS_NOTE = "Approved tasks assigned to this developer."

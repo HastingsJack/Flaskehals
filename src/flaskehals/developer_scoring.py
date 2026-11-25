@@ -20,7 +20,7 @@ above 0; otherwise the project manager chooses manually.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 WORKLOAD_WEIGHT = 40
 RELEVANCE_WEIGHT = 40
@@ -140,8 +140,7 @@ class DeveloperProfile:
 class DeveloperScore:
     name: str
     total: float
-    matched_keywords: tuple[str, ...] = ()
-    explanation: tuple[str, ...] = field(default=())
+    explanation: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -214,50 +213,51 @@ def _score(
     max_load: int,
     max_matches: int,
 ) -> DeveloperScore:
-    workload = 1.0 - profile.workload / max_load if max_load else 1.0
-    relevance = len(matched) / max_matches if max_matches else 0.0
-    level = (profile.experience_level or "").strip().lower()
-    experience = EXPERIENCE_LEVELS.get(level, 0.0)
+    """Add up the three factors; each returns its points and a sentence."""
+    factors = (
+        _workload_factor(profile, max_load),
+        _relevance_factor(profile, matched, max_matches),
+        _experience_factor(profile),
+    )
+    return DeveloperScore(
+        name=profile.name,
+        total=sum(points for points, _ in factors),
+        explanation=tuple(line for _, line in factors),
+    )
 
-    workload_points = workload * WORKLOAD_WEIGHT
-    relevance_points = relevance * RELEVANCE_WEIGHT
-    experience_points = experience * EXPERIENCE_WEIGHT
 
-    explanation = [
-        (
-            f"Workload: {profile.workload} item(s) "
-            f"({profile.open_pull_requests} open PR(s), "
-            f"{profile.review_assignments} for review, "
-            f"{profile.assigned_tasks} task(s)) "
-            f"-> {workload_points:.1f}/{WORKLOAD_WEIGHT}"
-        ),
-    ]
+def _workload_factor(profile: DeveloperProfile, max_load: int) -> tuple[float, str]:
+    share = 1.0 - profile.workload / max_load if max_load else 1.0
+    points = share * WORKLOAD_WEIGHT
+    line = (
+        f"Workload: {profile.workload} item(s) "
+        f"({profile.open_pull_requests} open PR(s), "
+        f"{profile.review_assignments} for review, "
+        f"{profile.assigned_tasks} task(s)) "
+        f"-> {points:.1f}/{WORKLOAD_WEIGHT}"
+    )
+    return points, line
+
+
+def _relevance_factor(
+    profile: DeveloperProfile, matched: list[str], max_matches: int
+) -> tuple[float, str]:
+    points = (len(matched) / max_matches if max_matches else 0.0) * RELEVANCE_WEIGHT
     if matched:
         shown = ", ".join(matched[:MAX_MATCHES_SHOWN])
         more = len(matched) - MAX_MATCHES_SHOWN
         suffix = f" (+{more} more)" if more > 0 else ""
-        explanation.append(
+        return points, (
             f"Relevant experience: {len(matched)} matching term(s) "
-            f"[{shown}{suffix}] -> {relevance_points:.1f}/{RELEVANCE_WEIGHT}"
+            f"[{shown}{suffix}] -> {points:.1f}/{RELEVANCE_WEIGHT}"
         )
-    elif profile.history_texts:
-        explanation.append(
-            f"Relevant experience: no matching terms -> 0/{RELEVANCE_WEIGHT}"
-        )
-    else:
-        explanation.append(
-            f"Relevant experience: no history available -> 0/{RELEVANCE_WEIGHT}"
-        )
-    if experience:
-        explanation.append(
-            f"Experience level: {level} -> {experience_points:.1f}/{EXPERIENCE_WEIGHT}"
-        )
-    else:
-        explanation.append(f"Experience level: not recorded -> 0/{EXPERIENCE_WEIGHT}")
+    reason = "no matching terms" if profile.history_texts else "no history available"
+    return 0.0, f"Relevant experience: {reason} -> 0/{RELEVANCE_WEIGHT}"
 
-    return DeveloperScore(
-        name=profile.name,
-        total=workload_points + relevance_points + experience_points,
-        matched_keywords=tuple(matched),
-        explanation=tuple(explanation),
-    )
+
+def _experience_factor(profile: DeveloperProfile) -> tuple[float, str]:
+    level = (profile.experience_level or "").strip().lower()
+    points = EXPERIENCE_LEVELS.get(level, 0.0) * EXPERIENCE_WEIGHT
+    if points:
+        return points, f"Experience level: {level} -> {points:.1f}/{EXPERIENCE_WEIGHT}"
+    return 0.0, f"Experience level: not recorded -> 0/{EXPERIENCE_WEIGHT}"

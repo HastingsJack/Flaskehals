@@ -8,10 +8,10 @@ from neo4j.exceptions import ServiceUnavailable
 from streamlit.testing.v1 import AppTest
 from streamlit.testing.v1.element_tree import Button
 
-from flaskehals.assignment import DeveloperProfile
+from flaskehals.developer_scoring import DeveloperProfile
+from flaskehals.models import NewTask, PreviousAssignment, Task
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
 from flaskehals.specification import SpecificationError
-from flaskehals.tasks import NewTask, PreviousAssignment, Task
 
 APP_PATH = str(Path(__file__).parents[1] / "src" / "flaskehals" / "app.py")
 
@@ -71,13 +71,12 @@ class Fakes:
         task_id: str,
         developer: str,
         current: str | None,
-        database: object = None,
     ) -> None:
         if self.reassign_error:
             raise self.reassign_error
         self.reassigned.append((task_id, developer, current))
 
-    def save(self, driver: object, task: NewTask, database: object = None) -> str:
+    def save(self, driver: object, task: NewTask) -> str:
         if self.save_error:
             raise self.save_error
         self.saved.append(task)

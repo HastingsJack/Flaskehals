@@ -147,6 +147,9 @@ def test_dashboard_is_default_page() -> None:
 @pytest.mark.usefixtures("auth_env")
 def test_each_page_has_its_own_address(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("flaskehals.tasks.fetch_tasks", lambda *a: [])
+    monkeypatch.setattr(
+        "flaskehals.reviewer_recommendations.fetch_recommendations", lambda *a: []
+    )
     at = log_in(run_app())
     at = open_page(at, "new-task")
     assert not on_dashboard(at)

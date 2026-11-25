@@ -1,8 +1,8 @@
 """Label open pull requests with their task's developer and a recommended reviewer.
 
-Run with: uv run flaskehals-assign
+Run with: uv run flaskehals-label
 
-features/githubsync/pull-request-task-assignment.feature. The application only
+See features/githubsync/pull-request-task-assignment.feature. The application only
 runs locally, so it polls GitHub instead of receiving webhooks. For each open
 pull request whose branch names a task (e.g. feat/task-1):
 
@@ -21,10 +21,11 @@ import sys
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from neo4j import Driver, GraphDatabase
+from neo4j import Driver
 from neo4j.exceptions import DriverError, Neo4jError
 
-from flaskehals.assignment import DeveloperProfile
+from flaskehals.db import DataStoreError, load_neo4j_config, open_driver
+from flaskehals.developer_scoring import DeveloperProfile
 from flaskehals.github import (
     GitHubClient,
     GitHubError,
@@ -32,8 +33,8 @@ from flaskehals.github import (
     RateLimitError,
     load_github_config,
 )
-from flaskehals.graph import load_neo4j_config
-from flaskehals.pr_assignment import (
+from flaskehals.models import Task
+from flaskehals.pr_planning import (
     Skipped,
     label_changes,
     plan_pull_request,
@@ -46,13 +47,13 @@ from flaskehals.reviewer_recommendations import (
     mark_labelled,
     save_recommendation,
 )
-from flaskehals.tasks import Task, fetch_developer_profiles, fetch_tasks
+from flaskehals.tasks import fetch_developer_profiles, fetch_tasks
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class AssignResult:
+class LabelResult:
     labelled: int = 0
     skipped: int = 0
     failed: int = 0
@@ -73,7 +74,6 @@ def _apply_labels(
 def _process(
     client: GitHubClient,
     driver: Driver,
-    database: str | None,
     pr: PullRequest,
     tasks: list[Task],
     profiles: list[DeveloperProfile],
@@ -87,31 +87,29 @@ def _process(
     if existing is not None and existing.labelled:
         return False
     if existing is None:
-        save_recommendation(driver, pr, plan, database)
+        save_recommendation(driver, pr, plan)
         developer, reviewer = plan.developer, plan.reviewer
     else:
         # Labelling failed on an earlier run: reuse what was stored.
         developer, reviewer = existing.developer, existing.reviewer
     _apply_labels(client, pr, developer, reviewer)
-    mark_labelled(driver, plan.task.id, pr.github_id, database)
+    mark_labelled(driver, plan.task.id, pr.github_id)
     return True
 
 
-def assign(
-    client: GitHubClient, driver: Driver, database: str | None = None
-) -> AssignResult:
+def label_pull_requests(client: GitHubClient, driver: Driver) -> LabelResult:
     """Process every open pull request. Raises if GitHub or Neo4j cannot be read."""
     # Read everything before changing anything.
     numbers = client.list_pull_request_numbers("open")
-    tasks = fetch_tasks(driver, database)
-    profiles = fetch_developer_profiles(driver, database)
-    stored = fetch_recommendations(driver, database)
+    tasks = fetch_tasks(driver)
+    profiles = fetch_developer_profiles(driver)
+    stored = fetch_recommendations(driver)
 
     labelled = skipped = failed = 0
     for number in numbers:
         try:
             pr = client.get_pull_request(number)
-            if _process(client, driver, database, pr, tasks, profiles, stored):
+            if _process(client, driver, pr, tasks, profiles, stored):
                 labelled += 1
             else:
                 skipped += 1
@@ -125,7 +123,7 @@ def assign(
         except (Neo4jError, DriverError) as exc:
             logger.error("Pull request #%d failed writing to Neo4j: %s", number, exc)
             failed += 1
-    return AssignResult(labelled, skipped, failed)
+    return LabelResult(labelled, skipped, failed)
 
 
 def main() -> int:
@@ -143,24 +141,13 @@ def main() -> int:
         return 1
 
     try:
-        with (
-            GitHubClient(github_config) as client,
-            GraphDatabase.driver(
-                neo4j_config.uri, auth=(neo4j_config.username, neo4j_config.password)
-            ) as driver,
-        ):
-            try:
-                driver.verify_connectivity()
-            except (Neo4jError, DriverError) as exc:
-                logger.error(
-                    "Cannot connect to Neo4j at %s - is it running? (%s)",
-                    neo4j_config.uri,
-                    exc,
-                )
-                return 1
-            result = assign(client, driver, neo4j_config.database)
+        with GitHubClient(github_config) as client, open_driver(neo4j_config) as driver:
+            result = label_pull_requests(client, driver)
     except GitHubError as exc:
         logger.error("Could not read pull requests, nothing was changed: %s", exc)
+        return 1
+    except DataStoreError as exc:
+        logger.error("%s Nothing was changed.", exc)
         return 1
     except (Neo4jError, DriverError) as exc:
         logger.error("Could not read from Neo4j, nothing was changed: %s", exc)

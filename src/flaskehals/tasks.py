@@ -13,14 +13,15 @@ stored once approved; rejected tasks are never written.
 """
 
 import uuid
-from dataclasses import dataclass
 from typing import LiteralString
 
 from neo4j import Driver, ManagedTransaction
 from neo4j.exceptions import ConstraintError
 
-from flaskehals.assignment import DeveloperProfile
+from flaskehals.db import DataStoreError
+from flaskehals.developer_scoring import DeveloperProfile
 from flaskehals.developers import WORKLOAD_COLUMNS
+from flaskehals.models import NewTask, PreviousAssignment, Task
 
 TASK_CONSTRAINT: LiteralString = (
     "CREATE CONSTRAINT task_id IF NOT EXISTS FOR (n:Task) REQUIRE n.id IS UNIQUE"
@@ -127,53 +128,9 @@ SET t.assigned_at = now
 """
 
 
-class DataStoreError(Exception):
-    """Neo4j is missing, unreachable or failed. The message is safe to show."""
-
-
-class TaskSaveError(DataStoreError):
-    """The task could not be saved. The message is safe to show."""
-
-
-class ReassignmentError(DataStoreError):
-    """The task could not be re-assigned. The message is safe to show."""
-
-
-@dataclass(frozen=True)
-class PreviousAssignment:
-    developer: str
-    assigned_at: str
-    unassigned_at: str
-
-
-@dataclass(frozen=True)
-class NewTask:
-    title: str
-    description: str  # the project manager's original description
-    specification: str  # the approved (possibly edited) specification
-    assigned_developer: str  # final assignee
-    recommended_developer: str | None  # original recommendation, if any
-
-
-@dataclass(frozen=True)
-class Task:
-    id: str
-    title: str
-    description: str
-    specification: str
-    status: str
-    recommended_developer: str | None
-    assigned_developer: str | None
-    created_at: str
-    previous_assignments: tuple[PreviousAssignment, ...] = ()
-    number: int | None = None  # global, shown as "Task-N"
-
-
-def fetch_developer_profiles(
-    driver: Driver, database: str | None = None
-) -> list[DeveloperProfile]:
+def fetch_developer_profiles(driver: Driver) -> list[DeveloperProfile]:
     """Return every developer with workload, experience level and history."""
-    records, _, _ = driver.execute_query(_DEVELOPER_PROFILES, database_=database)
+    records, _, _ = driver.execute_query(_DEVELOPER_PROFILES)
     return [
         DeveloperProfile(
             name=record["name"],
@@ -189,25 +146,21 @@ def fetch_developer_profiles(
     ]
 
 
-def _prepare_numbering(driver: Driver, database: str | None) -> None:
-    """Create the constraints and number any task that has no number yet."""
-    driver.execute_query(TASK_CONSTRAINT, database_=database)
-    driver.execute_query(TASK_NUMBER_CONSTRAINT, database_=database)
+def _backfill_numbers(driver: Driver) -> None:
+    """Number any task that has no number yet (see features/tasks/task-numbers)."""
     try:
-        driver.execute_query(_BACKFILL_NUMBERS, database_=database)
+        driver.execute_query(_BACKFILL_NUMBERS)
     except ConstraintError:
         pass  # another session numbered the same tasks first
 
 
-def save_approved_task(
-    driver: Driver, task: NewTask, database: str | None = None
-) -> str:
+def save_approved_task(driver: Driver, task: NewTask) -> str:
     """Store an approved task in a single transaction and return its id.
 
     The task gets the next task number in the same transaction, so a failed
     save uses no number. If a concurrent save took the number first, the unique
     constraint rejects this one and the save is retried with a fresh number.
-    Raises TaskSaveError if the assigned developer does not exist. Neo4j
+    Raises DataStoreError if the assigned developer does not exist. Neo4j
     errors propagate to the caller.
     """
     task_id = str(uuid.uuid4())
@@ -224,9 +177,9 @@ def save_approved_task(
         ).single()
         return None if record is None else record["id"]
 
-    _prepare_numbering(driver, database)
+    _backfill_numbers(driver)
     saved_id: str | None = None
-    with driver.session(database=database) as session:
+    with driver.session() as session:
         for attempt in range(_SAVE_ATTEMPTS):
             try:
                 saved_id = session.execute_write(work)
@@ -235,19 +188,19 @@ def save_approved_task(
                 if attempt == _SAVE_ATTEMPTS - 1:
                     raise
     if saved_id is None:
-        raise TaskSaveError(
+        raise DataStoreError(
             f"Developer '{task.assigned_developer}' no longer exists in Neo4j."
         )
     return saved_id
 
 
-def fetch_tasks(driver: Driver, database: str | None = None) -> list[Task]:
+def fetch_tasks(driver: Driver) -> list[Task]:
     """Return all stored tasks, newest first.
 
     Tasks created before task numbers existed are numbered first.
     """
-    _prepare_numbering(driver, database)
-    records, _, _ = driver.execute_query(_FETCH_TASKS, database_=database)
+    _backfill_numbers(driver)
+    records, _, _ = driver.execute_query(_FETCH_TASKS)
     tasks = []
     for record in records:
         data = record.data()
@@ -267,12 +220,11 @@ def reassign_task(
     task_id: str,
     new_developer: str,
     expected_current: str | None,
-    database: str | None = None,
 ) -> None:
     """Move a task to another developer in a single transaction.
 
     ``expected_current`` is the assignee the caller saw; if the task has since
-    moved, nothing is changed. Raises ReassignmentError for an unknown task or
+    moved, nothing is changed. Raises DataStoreError for an unknown task or
     developer, an unchanged assignee or a stale view. Neo4j errors propagate,
     and then nothing was changed.
     """
@@ -282,22 +234,20 @@ def reassign_task(
             _REASSIGN_STATE, task_id=task_id, new_developer=new_developer
         ).single()
         if state is None:
-            raise ReassignmentError("The task no longer exists.")
+            raise DataStoreError("The task no longer exists.")
         if state["current"] is None:
-            raise ReassignmentError("The task has no current assignee to replace.")
+            raise DataStoreError("The task has no current assignee to replace.")
         if state["current"] != expected_current:
-            raise ReassignmentError(
+            raise DataStoreError(
                 f"The task is now assigned to {state['current']}. Reload and try again."
             )
         if state["current"] == new_developer:
-            raise ReassignmentError(
-                f"{new_developer} is already assigned to this task."
-            )
+            raise DataStoreError(f"{new_developer} is already assigned to this task.")
         if state["target"] is None:
-            raise ReassignmentError(
+            raise DataStoreError(
                 f"Developer '{new_developer}' no longer exists in Neo4j."
             )
         tx.run(_REASSIGN, task_id=task_id, new_developer=new_developer)
 
-    with driver.session(database=database) as session:
+    with driver.session() as session:
         session.execute_write(work)

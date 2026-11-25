@@ -9,13 +9,13 @@ from conftest import TEST_PASSWORD, TEST_USERNAME
 from neo4j.exceptions import ServiceUnavailable
 from streamlit.testing.v1 import AppTest
 
-from flaskehals.developers import (
+from flaskehals.developer_graph import (
     DeveloperGraph,
-    DeveloperOverview,
     GraphEdge,
     GraphNode,
     fetch_developer_graph,
 )
+from flaskehals.developers import DeveloperOverview
 from flaskehals.graph_view import (
     FALLBACK_COLOR,
     build_agraph,
@@ -82,12 +82,12 @@ def test_fetch_builds_graph_and_deduplicates_shared_nodes() -> None:
         "node2": node_map(LABEL2),
     }
     driver.execute_query.return_value = ([row_bug, row_second], None, None)
-    graph = fetch_developer_graph(driver, "Hans", "db")
+    graph = fetch_developer_graph(driver, "Hans")
     assert graph is not None
     assert {n.id for n in graph.nodes} == {"d1", "p1", "l1", "l2"}
     assert {e.id for e in graph.edges} == {"e1", "e4", "e5"}
     assert graph.developer_id == "d1"
-    assert driver.execute_query.call_args.kwargs == {"name": "Hans", "database_": "db"}
+    assert driver.execute_query.call_args.kwargs == {"name": "Hans"}
 
 
 def test_fetch_developer_without_relationships_returns_only_the_developer() -> None:
@@ -223,16 +223,14 @@ def open_dashboard(
 ) -> tuple[AppTest, list[str]]:
     fetched: list[str] = []
 
-    def fake_graph(
-        driver: object, name: str, database: object
-    ) -> DeveloperGraph | None:
+    def fake_graph(driver: object, name: str) -> DeveloperGraph | None:
         fetched.append(name)
         return graph_for(name)
 
     monkeypatch.setattr(
         "flaskehals.developers.fetch_developer_overview", lambda *a: PEOPLE
     )
-    monkeypatch.setattr("flaskehals.developers.fetch_developer_graph", fake_graph)
+    monkeypatch.setattr("flaskehals.developer_graph.fetch_developer_graph", fake_graph)
     at = AppTest.from_file(APP_PATH).run()
     at.text_input(key="login_username").input(TEST_USERNAME)
     at.text_input(key="login_password").input(TEST_PASSWORD)

@@ -12,18 +12,17 @@ import sys
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from neo4j import Driver, GraphDatabase
+from neo4j import Driver
 from neo4j.exceptions import DriverError, Neo4jError
 
+from flaskehals.db import DataStoreError, load_neo4j_config, open_driver
 from flaskehals.github import GitHubClient, GitHubError, load_github_config
-from flaskehals.graph import (
+from flaskehals.interpretation import interpret_comment, interpret_labels
+from flaskehals.pull_request_store import (
     SyncedComment,
     SyncedPullRequest,
-    ensure_constraints,
-    load_neo4j_config,
     write_pull_requests,
 )
-from flaskehals.interpretation import interpret_comment, interpret_labels
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +47,9 @@ def fetch_pull_requests(client: GitHubClient) -> list[SyncedPullRequest]:
     return result
 
 
-def sync(
-    client: GitHubClient, driver: Driver, database: str | None = None
-) -> SyncResult:
+def sync(client: GitHubClient, driver: Driver) -> SyncResult:
     pull_requests = fetch_pull_requests(client)
-    ensure_constraints(driver, database)
-    write_pull_requests(driver, client.repository, pull_requests, database)
+    write_pull_requests(driver, client.repository, pull_requests)
     return SyncResult(
         pull_requests=len(pull_requests),
         comments=sum(len(pr.comments) for pr in pull_requests),
@@ -74,26 +70,13 @@ def main() -> int:
         return 1
 
     try:
-        with (
-            GitHubClient(github_config) as client,
-            GraphDatabase.driver(
-                neo4j_config.uri, auth=(neo4j_config.username, neo4j_config.password)
-            ) as driver,
-        ):
-            # Fail fast with a clear error, rather than the driver retrying
-            # for ~30s and spending GitHub requests first.
-            try:
-                driver.verify_connectivity()
-            except (Neo4jError, DriverError) as exc:
-                logger.error(
-                    "Cannot connect to Neo4j at %s - is it running? (%s)",
-                    neo4j_config.uri,
-                    exc,
-                )
-                return 1
-            result = sync(client, driver, neo4j_config.database)
+        with GitHubClient(github_config) as client, open_driver(neo4j_config) as driver:
+            result = sync(client, driver)
     except GitHubError as exc:
         logger.error("Sync failed, Neo4j was not changed: %s", exc)
+        return 1
+    except DataStoreError as exc:
+        logger.error("Sync failed: %s", exc)
         return 1
     except (Neo4jError, DriverError) as exc:
         logger.error("Sync failed while writing to Neo4j: %s", exc)

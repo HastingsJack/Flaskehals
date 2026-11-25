@@ -23,14 +23,9 @@ from typing import LiteralString
 
 from neo4j import Driver
 
-from flaskehals.assignment import DeveloperScore
+from flaskehals.developer_scoring import DeveloperScore
 from flaskehals.github import PullRequest
-from flaskehals.pr_assignment import PullRequestPlan
-
-RECOMMENDATION_CONSTRAINT: LiteralString = (
-    "CREATE CONSTRAINT reviewer_recommendation_key IF NOT EXISTS "
-    "FOR (n:ReviewerRecommendation) REQUIRE n.key IS UNIQUE"
-)
+from flaskehals.pr_planning import PullRequestPlan
 
 _SAVE: LiteralString = """
 MATCH (t:Task {id: $task_id})
@@ -126,7 +121,6 @@ def save_recommendation(
     driver: Driver,
     pr: PullRequest,
     plan: PullRequestPlan,
-    database: str | None = None,
 ) -> None:
     """Store the recommendation and PR link in one transaction.
 
@@ -134,7 +128,6 @@ def save_recommendation(
     request is left unchanged. Raises RecommendationSaveError if the task no
     longer exists. Neo4j errors propagate, and then nothing was stored.
     """
-    driver.execute_query(RECOMMENDATION_CONSTRAINT, database_=database)
     records, _, _ = driver.execute_query(
         _SAVE,
         task_id=plan.task.id,
@@ -147,7 +140,6 @@ def save_recommendation(
         reviewer=plan.reviewer,
         notice=plan.assignment.notice,
         candidates=_encode(plan),
-        database_=database,
     )
     if not records:
         raise RecommendationSaveError("The task no longer exists in Neo4j.")
@@ -167,22 +159,17 @@ def find_recommendation(
     )
 
 
-def mark_labelled(
-    driver: Driver, task_id: str, github_id: int, database: str | None = None
-) -> None:
+def mark_labelled(driver: Driver, task_id: str, github_id: int) -> None:
     """Record that the labels for this recommendation are now on GitHub."""
     driver.execute_query(
         _MARK_LABELLED,
         key=recommendation_key(task_id, github_id),
-        database_=database,
     )
 
 
-def fetch_recommendations(
-    driver: Driver, database: str | None = None
-) -> list[ReviewerRecommendation]:
+def fetch_recommendations(driver: Driver) -> list[ReviewerRecommendation]:
     """All stored recommendations, oldest first."""
-    records, _, _ = driver.execute_query(_FETCH, database_=database)
+    records, _, _ = driver.execute_query(_FETCH)
     return [
         ReviewerRecommendation(
             task_id=record["task_id"],

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from neo4j.exceptions import ConstraintError
 
+from flaskehals.models import NewTask, Task
 from flaskehals.task_numbers import (
     format_task_number,
     parse_branch_task_number,
@@ -12,7 +13,7 @@ from flaskehals.task_numbers import (
     task_for_branch,
 )
 from flaskehals.task_search import search_tasks
-from flaskehals.tasks import NewTask, Task, fetch_tasks, save_approved_task
+from flaskehals.tasks import fetch_tasks, save_approved_task
 
 NEW_TASK = NewTask("T", "D", "S", "Peter", "Hans")
 
@@ -107,12 +108,11 @@ def test_save_numbers_task_in_the_same_write_as_the_create() -> None:
     assert "max(existing.number)" in query and "number: number" in query
 
 
-def test_save_prepares_constraints_and_backfill_first() -> None:
+def test_save_numbers_unnumbered_tasks_first() -> None:
     driver, _ = driver_with_writes(None)
     save_approved_task(driver, NEW_TASK)
     queries = [call.args[0] for call in driver.execute_query.call_args_list]
-    assert "task_number" in queries[1]
-    assert "t.number IS NULL" in queries[2]
+    assert "t.number IS NULL" in queries[0]
 
 
 def test_save_retries_when_a_concurrent_save_took_the_number() -> None:
@@ -140,5 +140,5 @@ def test_fetch_numbers_unnumbered_tasks_first() -> None:
 def test_fetch_survives_a_concurrent_backfill() -> None:
     driver = MagicMock()
     ok = ([], None, None)
-    driver.execute_query.side_effect = [ok, ok, ConstraintError("dup"), ok]
+    driver.execute_query.side_effect = [ConstraintError("dup"), ok]
     assert fetch_tasks(driver) == []

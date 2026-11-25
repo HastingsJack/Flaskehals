@@ -7,7 +7,7 @@ use the lowercase form, e.g. ``feat/task-1``. Pure functions, no I/O.
 import re
 from collections.abc import Iterable
 
-from flaskehals.tasks import Task
+from flaskehals.models import Task
 
 # "task-<n>" as a whole word: not part of a longer word (mytask-1) and not
 # followed by more digits. Zero and leading zeros are not valid numbers.

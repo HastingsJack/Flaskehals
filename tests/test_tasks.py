@@ -5,12 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flaskehals.assignment import DeveloperProfile
+from flaskehals.db import DataStoreError
+from flaskehals.developer_scoring import DeveloperProfile
+from flaskehals.models import NewTask, Task
 from flaskehals.tasks import (
-    NewTask,
-    ReassignmentError,
-    Task,
-    TaskSaveError,
     fetch_developer_profiles,
     fetch_tasks,
     reassign_task,
@@ -39,7 +37,7 @@ def driver_saving(record: dict[str, str] | None) -> tuple[MagicMock, MagicMock]:
 
 def test_save_stores_all_task_fields_in_one_write() -> None:
     driver, tx = driver_saving({"id": "x"})
-    task_id = save_approved_task(driver, NEW_TASK, "db")
+    task_id = save_approved_task(driver, NEW_TASK)
     assert task_id == "x"
     assert tx.run.call_args.kwargs["id"]
     kwargs = tx.run.call_args.kwargs
@@ -52,12 +50,12 @@ def test_save_stores_all_task_fields_in_one_write() -> None:
     assert "status: 'approved'" in query
     assert "ASSIGNED_TO" in query
     assert "RECOMMENDED" in query
-    driver.session.assert_called_once_with(database="db")
+    driver.session.assert_called_once_with()
 
 
 def test_save_raises_when_assignee_does_not_exist() -> None:
     driver, _ = driver_saving(None)
-    with pytest.raises(TaskSaveError, match="Peter"):
+    with pytest.raises(DataStoreError, match="Peter"):
         save_approved_task(driver, NEW_TASK)
 
 
@@ -83,8 +81,8 @@ def test_fetch_tasks_maps_records() -> None:
     record.data.return_value = row
     driver = MagicMock()
     driver.execute_query.return_value = ([record], None, None)
-    assert fetch_tasks(driver, "db") == [Task(**row)]
-    assert driver.execute_query.call_args.kwargs == {"database_": "db"}
+    assert fetch_tasks(driver) == [Task(**row)]
+    assert driver.execute_query.call_args.kwargs == {}
 
 
 def test_fetch_developer_profiles_maps_records_and_drops_null_history() -> None:
@@ -132,7 +130,7 @@ def reassign_with(state: dict[str, str | None] | None) -> tuple[MagicMock, Magic
 
 def test_reassign_moves_assignment_in_one_transaction() -> None:
     driver, tx = reassign_with({"current": "Peter", "target": "Hans"})
-    reassign_task(driver, "1", "Hans", "Peter", "db")
+    reassign_task(driver, "1", "Hans", "Peter")
     assert tx.run.call_count == 2
     write_query = tx.run.call_args_list[1].args[0]
     assert "PREVIOUSLY_ASSIGNED_TO" in write_query and "DELETE" in write_query
@@ -153,7 +151,7 @@ def test_reassign_refuses_invalid_changes_without_writing(
 ) -> None:
     new = "Peter" if state and state["target"] == "Peter" else "Hans"
     driver, tx = reassign_with(state)
-    with pytest.raises(ReassignmentError, match=message):
+    with pytest.raises(DataStoreError, match=message):
         reassign_task(driver, "1", new, expected)
     assert tx.run.call_count == 1  # only the read; nothing written
 

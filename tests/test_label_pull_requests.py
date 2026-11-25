@@ -1,4 +1,4 @@
-"""flaskehals-assign (features/githubsync/pull-request-task-assignment.feature)."""
+"""flaskehals-label (features/githubsync/pull-request-task-assignment.feature)."""
 
 from typing import Any
 from unittest.mock import MagicMock
@@ -8,11 +8,11 @@ import pytest
 from fake_github import FakeGitHub, pr_json
 from neo4j.exceptions import ServiceUnavailable
 
-from flaskehals import assign as assign_module
-from flaskehals.assign import AssignResult, assign
-from flaskehals.assignment import DeveloperProfile
+from flaskehals import label_pull_requests as label_module
+from flaskehals.developer_scoring import DeveloperProfile
+from flaskehals.label_pull_requests import LabelResult, label_pull_requests
+from flaskehals.models import Task
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
-from flaskehals.tasks import Task
 
 SPEC = "## Objective\nExport CSV from Postgres"
 TASK = Task("u1", "CSV export", "d", SPEC, "approved", "Hans", "Hans", "x", number=1)
@@ -37,15 +37,15 @@ class Env:
         self.events: list[str] = []
         self.save_error: Exception | None = None
         self.read_error: Exception | None = None
-        monkeypatch.setattr(assign_module, "fetch_tasks", self.fetch_tasks)
+        monkeypatch.setattr(label_module, "fetch_tasks", self.fetch_tasks)
         monkeypatch.setattr(
-            assign_module, "fetch_developer_profiles", lambda *a: PROFILES
+            label_module, "fetch_developer_profiles", lambda *a: PROFILES
         )
         monkeypatch.setattr(
-            assign_module, "fetch_recommendations", lambda *a: self.stored
+            label_module, "fetch_recommendations", lambda *a: self.stored
         )
-        monkeypatch.setattr(assign_module, "save_recommendation", self.save)
-        monkeypatch.setattr(assign_module, "mark_labelled", self.mark)
+        monkeypatch.setattr(label_module, "save_recommendation", self.save)
+        monkeypatch.setattr(label_module, "mark_labelled", self.mark)
 
     def fetch_tasks(self, *args: object) -> list[Task]:
         if self.read_error:
@@ -72,14 +72,14 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Env:
     return Env(monkeypatch)
 
 
-def run(fake: FakeGitHub) -> AssignResult:
+def run(fake: FakeGitHub) -> LabelResult:
     with fake.client() as client:
-        return assign(client, MagicMock())
+        return label_pull_requests(client, MagicMock())
 
 
 def test_labels_pull_request_and_stores_recommendation(env: Env) -> None:
     fake = FakeGitHub([pr(5, "feat/task-1")])
-    assert run(fake) == AssignResult(labelled=1)
+    assert run(fake) == LabelResult(labelled=1)
     assert env.saved == ["5:Peter"]
     assert env.marked == [("u1", 1005)]
     assert fake.label_edits == [("add", 5, ["dev:Hans", "reviewer:Peter"])]
@@ -117,7 +117,7 @@ def test_skips_pull_requests_without_a_task_closed_and_drafts(env: Env) -> None:
             pr(4, "feat/task-1", draft=True),
         ]
     )
-    assert run(fake) == AssignResult(skipped=3)  # the closed one is never listed
+    assert run(fake) == LabelResult(skipped=3)  # the closed one is never listed
     assert fake.label_edits == [] and env.saved == []
 
 
@@ -126,7 +126,7 @@ def test_a_labelled_pull_request_is_processed_only_once(env: Env) -> None:
         ReviewerRecommendation("u1", 5, "u", "Hans", "Peter", None, (), "x", True)
     ]
     fake = FakeGitHub([pr(5, "feat/task-1")])
-    assert run(fake) == AssignResult(skipped=1)
+    assert run(fake) == LabelResult(skipped=1)
     assert env.saved == [] and fake.label_edits == []
 
 
@@ -137,7 +137,7 @@ def test_second_pull_request_for_same_task_gets_its_own_recommendation(
         ReviewerRecommendation("u1", 5, "u", "Hans", "Peter", None, (), "x", True)
     ]
     fake = FakeGitHub([pr(5, "feat/task-1"), pr(6, "feat/task-1-fix")])
-    assert run(fake) == AssignResult(labelled=1, skipped=1)
+    assert run(fake) == LabelResult(labelled=1, skipped=1)
     assert env.saved == ["6:Peter"]
 
 
@@ -148,7 +148,7 @@ def test_unlabelled_stored_recommendation_is_labelled_without_a_new_one(
         ReviewerRecommendation("u1", 5, "u", "Hans", "Maria", None, (), "x", False)
     ]
     fake = FakeGitHub([pr(5, "feat/task-1")])
-    assert run(fake) == AssignResult(labelled=1)
+    assert run(fake) == LabelResult(labelled=1)
     assert env.saved == []
     assert fake.label_edits == [("add", 5, ["dev:Hans", "reviewer:Maria"])]
     assert env.marked == [("u1", 1005)]
@@ -164,7 +164,7 @@ def test_github_failure_while_labelling_keeps_recommendation_and_continues(
         if r.method == "POST" and "/issues/5/" in r.url.path
         else original(r)
     )
-    assert run(fake) == AssignResult(labelled=1, failed=1)
+    assert run(fake) == LabelResult(labelled=1, failed=1)
     assert env.saved == ["5:Peter", "6:Peter"]  # recommendation kept for #5
     assert env.marked == [("u1", 1006)]  # #5 stays unlabelled, retried next run
 
@@ -172,7 +172,7 @@ def test_github_failure_while_labelling_keeps_recommendation_and_continues(
 def test_neo4j_failure_adds_no_label_and_continues(env: Env) -> None:
     env.save_error = ServiceUnavailable("down")
     fake = FakeGitHub([pr(5, "feat/task-1"), pr(6, "feat/task-1-b")])
-    assert run(fake) == AssignResult(failed=2)
+    assert run(fake) == LabelResult(failed=2)
     assert fake.label_edits == [] and env.marked == []
 
 
@@ -184,7 +184,7 @@ def test_rate_limit_stops_the_run(env: Env) -> None:
         if r.method == "POST"
         else original(r)
     )
-    assert run(fake) == AssignResult(failed=1)
+    assert run(fake) == LabelResult(failed=1)
 
 
 def test_github_failure_listing_changes_nothing(env: Env) -> None:
@@ -210,6 +210,6 @@ def test_missing_configuration_stops_before_contacting_anything(
 ) -> None:
     for name in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "NEO4J_URI", "NEO4J_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(assign_module, "load_dotenv", lambda: None)
-    assert assign_module.main() == 1
+    monkeypatch.setattr(label_module, "load_dotenv", lambda: None)
+    assert label_module.main() == 1
     assert "Not configured" in caplog.text

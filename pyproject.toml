@@ -1,7 +1,7 @@
 [project]
 name = "flaskehals"
 version = "0.1.0"
-description = "Add your description here"
+description = "PR Review Assistant: pull request activity, workload and reviewer recommendations"
 readme = "README.md"
 authors = [
     { name = "HastingsJack", email = "jackmhastings@gmail.com" }
@@ -17,9 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-flaskehals = "flaskehals:main"
 flaskehals-sync = "flaskehals.sync:main"
-flaskehals-assign = "flaskehals.assign:main"
+flaskehals-label = "flaskehals.label_pull_requests:main"
 
 [build-system]
 requires = ["uv_build>=0.13.8,<0.14.0"]

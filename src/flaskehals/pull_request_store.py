@@ -1,12 +1,10 @@
-"""Neo4j persistence for synchronised pull request data.
+"""Neo4j storage for synchronised pull request data.
 
 All writes use MERGE on GitHub IDs (or names) so repeated syncs update
 existing nodes instead of creating duplicates. Relationships derived from
 labels are replaced on each sync, so GitHub stays the source of truth.
 """
 
-import os
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import LiteralString
 
@@ -14,19 +12,6 @@ from neo4j import Driver, ManagedTransaction
 
 from flaskehals.github import Comment, PullRequest
 from flaskehals.interpretation import LabelInfo, ReviewOutcome
-
-URI_ENV = "NEO4J_URI"
-USERNAME_ENV = "NEO4J_USERNAME"
-PASSWORD_ENV = "NEO4J_PASSWORD"
-DATABASE_ENV = "NEO4J_DATABASE"
-
-
-@dataclass(frozen=True)
-class Neo4jConfig:
-    uri: str
-    username: str
-    password: str
-    database: str | None = None  # None = server default
 
 
 @dataclass(frozen=True)
@@ -41,39 +26,6 @@ class SyncedPullRequest:
     labels: LabelInfo
     comments: tuple[SyncedComment, ...]
 
-
-def load_neo4j_config(env: Mapping[str, str] | None = None) -> Neo4jConfig | None:
-    """Load Neo4j settings, or None if any required value is missing."""
-    if env is None:
-        env = os.environ
-    uri = env.get(URI_ENV, "").strip()
-    username = env.get(USERNAME_ENV, "").strip()
-    password = env.get(PASSWORD_ENV, "")
-    if not uri or not username or not password:
-        return None
-    database = env.get(DATABASE_ENV, "").strip() or None
-    return Neo4jConfig(uri=uri, username=username, password=password, database=database)
-
-
-CONSTRAINTS: tuple[LiteralString, ...] = (
-    (
-        "CREATE CONSTRAINT repository_full_name IF NOT EXISTS "
-        "FOR (n:Repository) REQUIRE n.full_name IS UNIQUE"
-    ),
-    (
-        "CREATE CONSTRAINT pull_request_github_id IF NOT EXISTS "
-        "FOR (n:PullRequest) REQUIRE n.github_id IS UNIQUE"
-    ),
-    (
-        "CREATE CONSTRAINT comment_github_id IF NOT EXISTS "
-        "FOR (n:Comment) REQUIRE n.github_id IS UNIQUE"
-    ),
-    (
-        "CREATE CONSTRAINT developer_name IF NOT EXISTS "
-        "FOR (n:Developer) REQUIRE n.name IS UNIQUE"
-    ),
-    "CREATE CONSTRAINT label_name IF NOT EXISTS FOR (n:Label) REQUIRE n.name IS UNIQUE",
-)
 
 _UPSERT_PULL_REQUEST: LiteralString = """
 MERGE (r:Repository {full_name: $repository})
@@ -141,11 +93,6 @@ FOREACH (name IN CASE WHEN $reviewer IS NULL THEN [] ELSE [$reviewer] END |
 """
 
 
-def ensure_constraints(driver: Driver, database: str | None = None) -> None:
-    for constraint in CONSTRAINTS:
-        driver.execute_query(constraint, database_=database)
-
-
 def _write_pull_request(
     tx: ManagedTransaction, repository: str, synced: SyncedPullRequest
 ) -> None:
@@ -183,7 +130,6 @@ def write_pull_requests(
     driver: Driver,
     repository: str,
     pull_requests: list[SyncedPullRequest],
-    database: str | None = None,
 ) -> None:
     """Write all pull requests in a single transaction (all or nothing)."""
 
@@ -191,5 +137,5 @@ def write_pull_requests(
         for synced in pull_requests:
             _write_pull_request(tx, repository, synced)
 
-    with driver.session(database=database) as session:
+    with driver.session() as session:
         session.execute_write(work)

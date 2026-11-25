@@ -2,10 +2,15 @@
 
 import pytest
 
-from flaskehals.assignment import DeveloperProfile
+from flaskehals.developer_scoring import DeveloperProfile
 from flaskehals.github import PullRequest
-from flaskehals.pr_assignment import PullRequestPlan, Skipped, plan_pull_request
-from flaskehals.tasks import Task
+from flaskehals.models import Task
+from flaskehals.pr_planning import (
+    PullRequestPlan,
+    Skipped,
+    label_changes,
+    plan_pull_request,
+)
 
 SPEC = "## Objective\nExport CSV from Postgres"
 TASK = Task(
@@ -76,12 +81,10 @@ def test_task_without_assignee_is_skipped() -> None:
     assert isinstance(plan(pr(), tasks=[unassigned]), Skipped)
 
 
-def test_labels_developer_and_recommended_reviewer() -> None:
+def test_plan_names_the_developer_and_recommended_reviewer() -> None:
     result = planned(pr())
     assert result.developer == "Hans"
     assert result.reviewer == "Peter"  # relevant history, Hans excluded
-    assert result.add_labels == ("dev:Hans", "reviewer:Peter")
-    assert result.remove_labels == ()
 
 
 def test_task_developer_is_never_the_reviewer() -> None:
@@ -93,35 +96,47 @@ def test_uses_developer_assigned_now_not_originally() -> None:
     reassigned = Task(
         "u1", "CSV export", "d", SPEC, "approved", "Hans", "Peter", "x", number=1
     )
-    result = planned(pr(labels=("dev:Hans",)), tasks=[reassigned])
-    assert result.add_labels[0] == "dev:Peter"
-    assert result.remove_labels == ("dev:Hans",)
+    result = planned(pr(), tasks=[reassigned])
+    assert result.developer == "Peter"
     assert result.reviewer != "Peter"
 
 
+def test_new_pull_request_gets_developer_and_reviewer_labels() -> None:
+    assert label_changes((), "Hans", "Peter") == (("dev:Hans", "reviewer:Peter"), ())
+
+
+def test_wrong_developer_label_is_replaced() -> None:
+    add, remove = label_changes(("dev:Hans",), "Peter", None)
+    assert add == ("dev:Peter",)
+    assert remove == ("dev:Hans",)
+
+
 def test_existing_correct_labels_are_not_added_again() -> None:
-    result = planned(pr(labels=("dev:Hans", "reviewer:Peter", "bug")))
-    assert result.add_labels == ()
-    assert result.remove_labels == ()
+    labels = ("dev:Hans", "reviewer:Peter", "bug")
+    assert label_changes(labels, "Hans", "Peter") == ((), ())
 
 
 def test_reviewer_recommendation_replaces_existing_reviewer_label() -> None:
-    result = planned(pr(labels=("dev:Hans", "reviewer:Bob")))
-    assert result.add_labels == ("reviewer:Peter",)
-    assert result.remove_labels == ("reviewer:Bob",)
+    labels = ("dev:Hans", "reviewer:Bob")
+    assert label_changes(labels, "Hans", "Peter") == (
+        ("reviewer:Peter",),
+        ("reviewer:Bob",),
+    )
 
 
 def test_prefix_match_is_case_insensitive_so_one_label_remains() -> None:
-    result = planned(pr(labels=("DEV:hans",)))
-    assert result.add_labels[0] == "dev:Hans"
-    assert result.remove_labels == ("DEV:hans",)
+    add, remove = label_changes(("DEV:hans",), "Hans", None)
+    assert add == ("dev:Hans",)
+    assert remove == ("DEV:hans",)
 
 
-def test_no_suitable_reviewer_still_labels_developer_and_keeps_reviewer_label() -> None:
-    result = planned(pr(labels=("reviewer:Bob",)), profiles=[HANS])
+def test_without_a_reviewer_an_existing_reviewer_label_is_kept() -> None:
+    assert label_changes(("reviewer:Bob",), "Hans", None) == (("dev:Hans",), ())
+
+
+def test_no_suitable_reviewer_is_explained() -> None:
+    result = planned(pr(), profiles=[HANS])
     assert result.reviewer is None
-    assert result.add_labels == ("dev:Hans",)
-    assert result.remove_labels == ()
     assert result.assignment.notice
 
 

@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import bcrypt
 import pytest
 
@@ -33,6 +35,8 @@ def no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def neo4j_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neo4j settings, and a driver that never really connects."""
     monkeypatch.setenv("NEO4J_URI", "neo4j://localhost:7687")
     monkeypatch.setenv("NEO4J_USERNAME", "neo4j")
     monkeypatch.setenv("NEO4J_PASSWORD", "secret")
+    monkeypatch.setattr("flaskehals.db.open_driver", lambda config: MagicMock())

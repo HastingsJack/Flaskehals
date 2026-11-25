@@ -4,9 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flaskehals.assignment import AssignmentResult, DeveloperScore
+from flaskehals.developer_scoring import AssignmentResult, DeveloperScore
 from flaskehals.github import PullRequest
-from flaskehals.pr_assignment import PullRequestPlan
+from flaskehals.models import Task
+from flaskehals.pr_planning import PullRequestPlan
 from flaskehals.reviewer_recommendations import (
     RecommendationSaveError,
     ReviewerRecommendation,
@@ -15,7 +16,6 @@ from flaskehals.reviewer_recommendations import (
     recommendation_key,
     save_recommendation,
 )
-from flaskehals.tasks import Task
 
 TASK = Task("u1", "CSV export", "d", "s", "approved", "Hans", "Hans", "x", number=1)
 PR = PullRequest(55, 7, "Add export", "https://x/7", "open", False, "c", "u", None, None, 1, 1, 1, ())  # fmt: skip
@@ -25,13 +25,11 @@ PLAN = PullRequestPlan(
     reviewer="Peter",
     assignment=AssignmentResult(
         scores=(
-            DeveloperScore("Peter", 71.234, (), ("Workload: 0",)),
-            DeveloperScore("Hans", 50.0, (), ("Workload: 3",)),
+            DeveloperScore("Peter", 71.234, ("Workload: 0",)),
+            DeveloperScore("Hans", 50.0, ("Workload: 3",)),
         ),
         recommended="Peter",
     ),
-    add_labels=("dev:Hans", "reviewer:Peter"),
-    remove_labels=(),
 )
 
 
@@ -43,7 +41,7 @@ def driver_returning(records: list[object]) -> MagicMock:
 
 def test_save_stores_recommendation_pr_link_and_reasoning() -> None:
     driver = driver_returning([{"key": "k"}])
-    save_recommendation(driver, PR, PLAN, "db")
+    save_recommendation(driver, PR, PLAN)
     query = driver.execute_query.call_args.args[0]
     kwargs = driver.execute_query.call_args.kwargs
     assert "HAS_PULL_REQUEST" in query and "HAS_REVIEWER_RECOMMENDATION" in query
@@ -51,7 +49,6 @@ def test_save_stores_recommendation_pr_link_and_reasoning() -> None:
     assert kwargs["key"] == "u1:55" == recommendation_key("u1", 55)
     assert kwargs["reviewer"] == "Peter" and kwargs["developer"] == "Hans"
     assert kwargs["github_id"] == 55 and kwargs["number"] == 7
-    assert kwargs["database_"] == "db"
     assert '"Peter"' in kwargs["candidates"] and "Workload: 3" in kwargs["candidates"]
 
 
@@ -63,18 +60,8 @@ def test_save_never_overwrites_an_existing_recommendation() -> None:
     assert "ON CREATE SET r.task_id" in query
 
 
-def test_save_creates_the_uniqueness_constraint_first() -> None:
-    driver = driver_returning([{"key": "k"}])
-    save_recommendation(driver, PR, PLAN)
-    assert (
-        "reviewer_recommendation_key" in driver.execute_query.call_args_list[0].args[0]
-    )
-
-
 def test_save_without_reviewer_stores_the_notice() -> None:
-    plan = PullRequestPlan(
-        TASK, "Hans", None, AssignmentResult((), None, "none found"), (), ()
-    )
+    plan = PullRequestPlan(TASK, "Hans", None, AssignmentResult((), None, "none found"))
     driver = driver_returning([{"key": "k"}])
     save_recommendation(driver, PR, plan)
     kwargs = driver.execute_query.call_args.kwargs
@@ -95,8 +82,8 @@ def test_save_propagates_database_errors() -> None:
 
 def test_mark_labelled_targets_the_recommendation() -> None:
     driver = driver_returning([])
-    mark_labelled(driver, "u1", 55, "db")
-    assert driver.execute_query.call_args.kwargs == {"key": "u1:55", "database_": "db"}
+    mark_labelled(driver, "u1", 55)
+    assert driver.execute_query.call_args.kwargs == {"key": "u1:55"}
     assert "labelled = true" in driver.execute_query.call_args.args[0]
 
 

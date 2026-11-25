@@ -35,11 +35,11 @@ def test_fetch_maps_records_including_assigned_tasks() -> None:
         None,
         None,
     )
-    assert fetch_developer_overview(driver, "db") == [
+    assert fetch_developer_overview(driver) == [
         DeveloperOverview("Hans", "hans.png", 2, 1, 2),
         DeveloperOverview("Idle", None, 0, 0, 0),
     ]
-    assert driver.execute_query.call_args.kwargs == {"database_": "db"}
+    assert driver.execute_query.call_args.kwargs == {}
 
 
 def test_query_is_read_only_and_counts_only_open_pull_requests() -> None:

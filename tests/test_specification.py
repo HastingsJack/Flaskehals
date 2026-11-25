@@ -14,8 +14,8 @@ from flaskehals.specification import (
     build_messages,
     generate_specification,
     load_openrouter_config,
-    validate_task_input,
 )
+from flaskehals.task_input import validate_task_input
 
 CONFIG = OpenRouterConfig(api_key="sk-test", base_url="https://example.test/api/v1")
 

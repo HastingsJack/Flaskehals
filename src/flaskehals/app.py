@@ -4,31 +4,31 @@ Run with: uv run streamlit run src/flaskehals/app.py
 """
 
 from collections.abc import Callable
+from functools import partial
+from typing import Concatenate
 
 import streamlit as st
 from dotenv import load_dotenv
-from neo4j import Driver, GraphDatabase
+from neo4j import Driver
 from neo4j.exceptions import DriverError, Neo4jError
 
 from flaskehals.auth import load_auth_config, verify_credentials
 from flaskehals.dashboard import render_developer_overview
-from flaskehals.developers import (
-    DeveloperGraph,
-    DeveloperOverview,
-    fetch_developer_graph,
-    fetch_developer_overview,
+from flaskehals.db import (
+    UNAVAILABLE_MESSAGE,
+    DataStoreError,
+    Neo4jConfig,
+    load_neo4j_config,
+    open_driver,
 )
-from flaskehals.graph import Neo4jConfig, load_neo4j_config
+from flaskehals.developer_graph import DeveloperGraph, fetch_developer_graph
+from flaskehals.developers import DeveloperOverview, fetch_developer_overview
 from flaskehals.reviewer_recommendations import fetch_recommendations
 from flaskehals.specification import generate_specification, load_openrouter_config
-from flaskehals.task_page import (
-    TaskServices,
-    keep_draft_state,
-    render_task_creation,
-    render_task_overview,
-)
+from flaskehals.task_creation_page import keep_draft_state, render_task_creation
+from flaskehals.task_overview_page import render_task_overview
+from flaskehals.task_services import TaskServices
 from flaskehals.tasks import (
-    DataStoreError,
     fetch_developer_profiles,
     fetch_tasks,
     reassign_task,
@@ -45,23 +45,25 @@ CONFIG_ERROR_MESSAGE = (
 NEO4J_CONFIG_ERROR_MESSAGE = (
     "Neo4j is not configured. Set NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD."
 )
-NEO4J_UNAVAILABLE_MESSAGE = "Could not reach Neo4j. Is it running?"
 
 
 @st.cache_resource
 def get_driver(config: Neo4jConfig) -> Driver:
-    return GraphDatabase.driver(config.uri, auth=(config.username, config.password))
+    """One driver per session of the server, shared by every page run."""
+    return open_driver(config)
 
 
-def neo4j_call[T](work: Callable[[Driver, str | None], T]) -> T:
-    """Run a Neo4j operation, turning driver failures into DataStoreError."""
+def neo4j_call[**P, T](
+    work: Callable[Concatenate[Driver, P], T], *args: P.args, **kwargs: P.kwargs
+) -> T:
+    """Run ``work(driver, *args)``, turning driver failures into DataStoreError."""
     config = load_neo4j_config()
     if config is None:
         raise DataStoreError(NEO4J_CONFIG_ERROR_MESSAGE)
     try:
-        return work(get_driver(config), config.database)
+        return work(get_driver(config), *args, **kwargs)
     except (Neo4jError, DriverError) as exc:
-        raise DataStoreError(NEO4J_UNAVAILABLE_MESSAGE) from exc
+        raise DataStoreError(UNAVAILABLE_MESSAGE) from exc
 
 
 def load_developers() -> list[DeveloperOverview] | None:
@@ -74,29 +76,18 @@ def load_developers() -> list[DeveloperOverview] | None:
 
 
 def load_developer_graph(name: str) -> DeveloperGraph | None:
-    return neo4j_call(lambda driver, db: fetch_developer_graph(driver, name, db))
+    return neo4j_call(fetch_developer_graph, name)
 
 
 def build_task_services() -> TaskServices:
     openrouter = load_openrouter_config()
-
-    def generate(
-        title: str, description: str, spec: str | None, feedback: str | None
-    ) -> str:
-        assert openrouter is not None
-        return generate_specification(openrouter, title, description, spec, feedback)
-
     return TaskServices(
-        generate=generate if openrouter is not None else None,
-        load_profiles=lambda: neo4j_call(fetch_developer_profiles),
-        save_task=lambda task: neo4j_call(
-            lambda driver, db: save_approved_task(driver, task, db)
-        ),
-        load_tasks=lambda: neo4j_call(fetch_tasks),
-        load_recommendations=lambda: neo4j_call(fetch_recommendations),
-        reassign_task=lambda task_id, developer, current: neo4j_call(
-            lambda driver, db: reassign_task(driver, task_id, developer, current, db)
-        ),
+        generate=partial(generate_specification, openrouter) if openrouter else None,
+        load_profiles=partial(neo4j_call, fetch_developer_profiles),
+        save_task=partial(neo4j_call, save_approved_task),
+        load_tasks=partial(neo4j_call, fetch_tasks),
+        reassign_task=partial(neo4j_call, reassign_task),
+        load_recommendations=partial(neo4j_call, fetch_recommendations),
     )
 
 

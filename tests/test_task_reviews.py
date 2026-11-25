@@ -4,9 +4,9 @@ import pytest
 from neo4j.exceptions import ServiceUnavailable
 from test_task_creation import Fakes, fakes, go_to, open_task_page  # noqa: F401
 
-from flaskehals.assignment import DeveloperScore
+from flaskehals.developer_scoring import DeveloperScore
+from flaskehals.models import Task
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
-from flaskehals.tasks import Task
 
 pytestmark = pytest.mark.usefixtures("auth_env", "neo4j_env")
 
