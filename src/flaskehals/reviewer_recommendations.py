@@ -44,6 +44,7 @@ MERGE (r:ReviewerRecommendation {key: $key})
                 r.developer = $developer,
                 r.reviewer = $reviewer,
                 r.notice = $notice,
+                r.reasoning = $reasoning,
                 r.candidates = $candidates,
                 r.created_at = datetime(),
                 r.labelled = false
@@ -65,6 +66,7 @@ RETURN r.task_id AS task_id,
        r.developer AS developer,
        r.reviewer AS reviewer,
        r.notice AS notice,
+       r.reasoning AS reasoning,
        r.candidates AS candidates,
        toString(r.created_at) AS created_at,
        r.labelled AS labelled,
@@ -140,6 +142,7 @@ class ReviewerRecommendation:
     # Chronological. ``reviewer`` is the current one; the original
     # recommendation is previous_reviewers[0] when there are any.
     previous_reviewers: tuple[PreviousReviewer, ...] = ()
+    reasoning: str | None = None  # the language model's reasons, when it decided
 
     @property
     def recommended_reviewer(self) -> str | None:
@@ -204,6 +207,7 @@ def save_recommendation(
         developer=plan.developer,
         reviewer=plan.reviewer,
         notice=plan.assignment.notice,
+        reasoning=plan.assignment.reasoning,
         candidates=_encode(plan),
     )
     if not records:
@@ -334,6 +338,7 @@ def fetch_recommendations(driver: Driver) -> list[ReviewerRecommendation]:
             developer=record["developer"],
             reviewer=record["reviewer"],
             notice=record["notice"],
+            reasoning=record.get("reasoning"),
             candidates=_decode(record["candidates"]),
             created_at=record["created_at"],
             labelled=bool(record["labelled"]),

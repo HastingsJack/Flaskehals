@@ -45,11 +45,17 @@ def test_shows_reviewer_pull_request_and_reasoning(fakes: Fakes) -> None:  # noq
     assert "Recommended reviewer: **Peter**" in shown
     assert "[#7](https://x/pull/7)" in shown
     assert "recommended 2026-11-25" in shown
-    # every candidate's score and reasons are viewable
-    assert "**Maria** - 40.0/100" in shown and "Workload: 4 item(s)" in shown
-    assert any(
-        e.label == "How the reviewer recommendation was scored" for e in at.expander
-    )
+    # only the AI response is shown: no score breakdown or dropdown
+    assert "**Maria** - 40.0/100" not in shown
+    assert "Workload: 4 item(s)" not in shown
+    assert not any("was scored" in e.label for e in at.expander)
+
+
+def test_shows_the_stored_ai_reasoning(fakes: Fakes) -> None:  # noqa: F811
+    fakes.tasks = [TASK]
+    fakes.recommendations = [rec(reasoning="Peter reviewed similar Postgres work.")]
+    shown = texts(go_to(open_task_page(), "Tasks"))
+    assert "**Why (AI):** Peter reviewed similar Postgres work." in shown
 
 
 def test_unlabelled_recommendation_is_flagged(fakes: Fakes) -> None:  # noqa: F811

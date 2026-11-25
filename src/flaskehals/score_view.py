@@ -1,34 +1,41 @@
-"""Streamlit display of a recommendation and the reasoning behind it."""
+"""Streamlit display of a recommendation and the AI's reasoning.
 
-from collections.abc import Sequence
+features/tasks/task-ai-only-recommendation-display.feature: only the
+recommendation, the notice and the model's reasoning are shown. The rule-based
+scores are still computed, stored and sent to the model, but not displayed.
+"""
 
 import streamlit as st
 
-from flaskehals.developer_scoring import AssignmentResult, DeveloperScore
+from flaskehals.developer_scoring import AssignmentResult
 
 
-def render_scores(
-    scores: Sequence[DeveloperScore],
+def render_recommendation(
     recommended: str | None,
     notice: str | None,
     role: str,
+    reasoning: str | None = None,
 ) -> None:
-    """Show a recommendation and the reasoning behind every candidate's score.
+    """Show a recommended developer or reviewer. ``role`` is only wording.
 
-    Developer and reviewer recommendations use the same scoring, so both are
-    explained the same way. ``role`` is only used in the wording.
+    ``reasoning`` is the language model's explanation of its pick; it is None
+    when the rule-based fallback was used, and the notice then says so.
     """
     if notice:
         st.warning(notice)
     if recommended:
         st.info(f"Recommended {role}: **{recommended}**")
-    if scores:
-        with st.expander(f"How the {role} recommendation was scored"):
-            for score in scores:
-                st.markdown(f"**{score.name}** - {score.total:.1f}/100")
-                for line in score.explanation:
-                    st.markdown(f"- {line}")
+    if reasoning:
+        st.markdown(f"**Why (AI):** {reasoning}")
 
 
 def render_developer_result(result: AssignmentResult) -> None:
-    render_scores(result.scores, result.recommended, result.notice, "developer")
+    render_recommendation(
+        result.recommended, result.notice, "developer", result.reasoning
+    )
+
+
+def render_reviewer_result(result: AssignmentResult) -> None:
+    render_recommendation(
+        result.recommended, result.notice, "reviewer", result.reasoning
+    )

@@ -13,6 +13,7 @@ from flaskehals.developer_scoring import (
     DeveloperProfile,
     recommend_developer,
 )
+from flaskehals.llm_recommendation import Complete, decide_with_llm
 from flaskehals.models import NewTask, Task
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
 
@@ -31,6 +32,9 @@ class TaskServices:
     # (task id, pull request number, new reviewer, reviewer the caller saw);
     # None when GitHub is not configured, so the button is disabled.
     reassign_reviewer: Callable[[str, int, str, str], None] | None = None
+    # Chat messages -> model reply; None when no OpenRouter key is configured,
+    # in which case recommendations fall back to the rule-based ranking.
+    complete: Complete | None = None
 
 
 def evaluate(
@@ -38,10 +42,19 @@ def evaluate(
     title: str,
     specification: str,
     exclude: str | None = None,
+    role: str = "developer",
 ) -> AssignmentResult:
-    """Recommend a developer; a database failure becomes a notice, not a crash."""
+    """Recommend a developer (or, with ``role="reviewer"``, a reviewer).
+
+    The rule-based ranking is computed first as evidence and as the fallback;
+    the language model then makes the decision. A database failure becomes a
+    notice, not a crash.
+    """
     try:
         profiles = services.load_profiles()
     except DataStoreError as exc:
         return AssignmentResult(scores=(), recommended=None, notice=str(exc))
-    return recommend_developer(profiles, title, specification, exclude)
+    baseline = recommend_developer(profiles, title, specification, exclude)
+    return decide_with_llm(
+        services.complete, role, profiles, title, specification, baseline, exclude
+    )

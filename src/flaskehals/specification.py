@@ -50,7 +50,11 @@ that change these rules.
 - Respond with the specification only."""
 
 
-class SpecificationError(Exception):
+class OpenRouterError(Exception):
+    """An OpenRouter request failed. The message is safe to show."""
+
+
+class SpecificationError(OpenRouterError):
     """A specification could not be generated. The message is safe to show."""
 
 
@@ -114,10 +118,26 @@ def generate_specification(
     client: httpx.Client | None = None,
 ) -> str:
     """Generate (or regenerate) a specification. Raises SpecificationError."""
-    payload = {
-        "model": config.model,
-        "messages": build_messages(title, description, current_specification, feedback),
-    }
+    messages = build_messages(title, description, current_specification, feedback)
+    try:
+        return request_completion(config, messages, "specification", client)
+    except OpenRouterError as exc:
+        raise SpecificationError(str(exc)) from exc
+
+
+def request_completion(
+    config: OpenRouterConfig,
+    messages: list[dict[str, str]],
+    purpose: str,
+    client: httpx.Client | None = None,
+) -> str:
+    """Send chat messages to OpenRouter and return the reply text.
+
+    Shared by every feature that uses the language model. ``purpose`` only
+    appears in error messages, e.g. "specification" or "recommendation".
+    Raises OpenRouterError with a message that is safe to show.
+    """
+    payload = {"model": config.model, "messages": messages}
     headers = {"Authorization": f"Bearer {config.api_key}"}
     url = f"{config.base_url}/chat/completions"
 
@@ -126,37 +146,35 @@ def generate_specification(
     try:
         response = http.post(url, json=payload, headers=headers)
     except httpx.TimeoutException as exc:
-        raise SpecificationError("The specification service timed out.") from exc
+        raise OpenRouterError(f"The {purpose} service timed out.") from exc
     except httpx.HTTPError as exc:
-        raise SpecificationError(
-            "The specification service could not be reached."
-        ) from exc
+        raise OpenRouterError(f"The {purpose} service could not be reached.") from exc
     finally:
         if owns_client:
             http.close()
 
     if response.status_code == 429:
-        raise SpecificationError(
-            "The specification service is rate limited. Try again shortly."
+        raise OpenRouterError(
+            f"The {purpose} service is rate limited. Try again shortly."
         )
     if response.status_code in (401, 403):
-        raise SpecificationError(
-            "The specification service rejected the API key. Check OPENROUTER_API_KEY."
+        raise OpenRouterError(
+            f"The {purpose} service rejected the API key. Check OPENROUTER_API_KEY."
         )
     if response.status_code >= 400:
-        raise SpecificationError(
-            f"The specification service returned an error ({response.status_code})."
+        raise OpenRouterError(
+            f"The {purpose} service returned an error ({response.status_code})."
         )
-    return _extract_content(response)
+    return _extract_content(response, purpose)
 
 
-def _extract_content(response: httpx.Response) -> str:
+def _extract_content(response: httpx.Response, purpose: str) -> str:
     try:
         content = response.json()["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise SpecificationError(
-            "The specification service returned an unexpected response."
+        raise OpenRouterError(
+            f"The {purpose} service returned an unexpected response."
         ) from exc
     if not isinstance(content, str) or not content.strip():
-        raise SpecificationError("The specification service returned an empty result.")
+        raise OpenRouterError(f"The {purpose} service returned an empty result.")
     return content.strip()

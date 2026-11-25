@@ -148,6 +148,8 @@ class AssignmentResult:
     scores: tuple[DeveloperScore, ...]
     recommended: str | None
     notice: str | None = None
+    # Why the language model chose ``recommended``; None for a deterministic pick.
+    reasoning: str | None = None
 
 
 def extract_keywords(text: str) -> frozenset[str]:

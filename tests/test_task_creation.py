@@ -372,13 +372,15 @@ TASK = Task(
 def reassignment_open(fakes: Fakes) -> AppTest:
     fakes.tasks = [TASK]
     at = go_to(open_task_page(), "Tasks")
-    return button(at, "Re-assign").click().run()
+    return button(at, "Re-assign developer").click().run()
 
 
 def test_each_assigned_task_offers_reassign(fakes: Fakes) -> None:
     fakes.tasks = [TASK]
     at = go_to(open_task_page(), "Tasks")
-    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+    assert [b.label for b in at.button if b.label != "Log out"] == [
+        "Re-assign developer"
+    ]
 
 
 def test_reassign_panel_shows_current_developer_and_recommends_another(
@@ -396,7 +398,9 @@ def test_confirm_reassigns_to_selected_developer(fakes: Fakes) -> None:
     at = button(at, "Confirm re-assignment").click().run()
     assert fakes.reassigned == [("1", "Hans", "Peter")]
     assert any("re-assigned from Peter to Hans" in s.value for s in at.success)
-    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+    assert [b.label for b in at.button if b.label != "Log out"] == [
+        "Re-assign developer"
+    ]
 
 
 def test_confirm_without_selection_is_rejected(fakes: Fakes) -> None:
@@ -419,7 +423,9 @@ def test_cancel_leaves_assignment_unchanged(fakes: Fakes) -> None:
     at = reassignment_open(fakes)
     at = button(at, "Cancel").click().run()
     assert fakes.reassigned == []
-    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+    assert [b.label for b in at.button if b.label != "Log out"] == [
+        "Re-assign developer"
+    ]
 
 
 def test_no_suitable_developer_notifies_and_allows_manual_choice(

@@ -307,3 +307,11 @@ def test_history_is_listed_and_original_recommendation_kept(
     assert "**Current reviewer:** Niels" in shown
     assert "- Peter: 2026-11-25 to 2026-11-26" in shown
     assert SCORES[0].name == "Peter"
+
+
+def test_developer_and_reviewer_buttons_are_side_by_side(page: Reassigns) -> None:
+    at = go_to(open_task_page(), "Tasks")
+    labels = [b.label for b in at.button if b.label != "Log out"]
+    assert labels == ["Re-assign developer", "Re-assign reviewer"]
+    row = [c for c in at.columns if c.button]
+    assert [c.button[0].label for c in row] == labels  # one row, one button each

@@ -26,7 +26,12 @@ from flaskehals.developers import DeveloperOverview, fetch_developer_overview
 from flaskehals.github import GitHubClient, load_github_config
 from flaskehals.reviewer_reassignment import reassign_reviewer
 from flaskehals.reviewer_recommendations import fetch_recommendations
-from flaskehals.specification import generate_specification, load_openrouter_config
+from flaskehals.specification import (
+    OpenRouterConfig,
+    generate_specification,
+    load_openrouter_config,
+    request_completion,
+)
 from flaskehals.task_creation_page import keep_draft_state, render_task_creation
 from flaskehals.task_overview_page import render_task_overview
 from flaskehals.task_services import TaskServices
@@ -102,10 +107,15 @@ def reassign_reviewer_on_github(
         )
 
 
+def _complete(config: OpenRouterConfig, messages: list[dict[str, str]]) -> str:
+    return request_completion(config, messages, "recommendation")
+
+
 def build_task_services() -> TaskServices:
     openrouter = load_openrouter_config()
     return TaskServices(
         generate=partial(generate_specification, openrouter) if openrouter else None,
+        complete=(partial(_complete, openrouter) if openrouter else None),
         load_profiles=partial(neo4j_call, fetch_developer_profiles),
         save_task=partial(neo4j_call, save_approved_task),
         load_tasks=partial(neo4j_call, fetch_tasks),

@@ -11,6 +11,7 @@ import streamlit as st
 
 from flaskehals.db import DataStoreError
 from flaskehals.developer_scoring import AssignmentResult
+from flaskehals.layout import button_row
 from flaskehals.models import NewTask
 from flaskehals.score_view import render_developer_result
 from flaskehals.specification import SpecificationError
@@ -226,7 +227,7 @@ def _render_draft(services: TaskServices, draft: TaskDraft) -> None:
         key=DEVELOPER_KEY,
         disabled=not names,
     )
-    approve, reject = st.columns(2)
+    approve, reject = button_row(2)
     approve.button(
         "Approve and save task",
         type="primary",

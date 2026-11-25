@@ -10,9 +10,14 @@ import streamlit as st
 
 from flaskehals.db import DataStoreError
 from flaskehals.developer_scoring import AssignmentResult
+from flaskehals.layout import button_row
 from flaskehals.models import Task
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
-from flaskehals.score_view import render_developer_result, render_scores
+from flaskehals.score_view import (
+    render_developer_result,
+    render_recommendation,
+    render_reviewer_result,
+)
 from flaskehals.task_numbers import format_task_number
 from flaskehals.task_search import MAX_QUERY_LENGTH, search_tasks, validate_query
 from flaskehals.task_services import TaskServices, evaluate
@@ -117,7 +122,7 @@ def _render_reassignment(services: TaskServices, task: Task) -> None:
         ),
         disabled=not names,
     )
-    confirm, cancel = st.columns(2)
+    confirm, cancel = button_row(2)
     confirm.button(
         "Confirm re-assignment",
         type="primary",
@@ -141,16 +146,27 @@ def _open_reviewer_reassignment(
 ) -> None:
     _close_reassignment()
     # Ranked again now, so the default reflects today's workload.
-    result = evaluate(services, task.title, task.specification, task.assigned_developer)
+    result = evaluate(
+        services,
+        task.title,
+        task.specification,
+        task.assigned_developer,
+        role="reviewer",
+    )
     st.session_state[REVIEWER_TASK_KEY] = _reviewer_key(task, rec)
     st.session_state[REVIEWER_RESULT_KEY] = result
-    st.session_state[REVIEWER_SELECT_KEY] = next(
-        (
-            score.name
-            for score in result.scores
-            if score.name not in (rec.reviewer, task.assigned_developer)
-        ),
-        None,
+    # Prefer the recommendation, unless it is the reviewer being replaced.
+    st.session_state[REVIEWER_SELECT_KEY] = (
+        result.recommended
+        if result.recommended and result.recommended != rec.reviewer
+        else next(
+            (
+                score.name
+                for score in result.scores
+                if score.name not in (rec.reviewer, task.assigned_developer)
+            ),
+            None,
+        )
     )
 
 
@@ -190,8 +206,7 @@ def _render_reviewer_reassignment(
     st.markdown(f"**Current reviewer:** {rec.reviewer or 'none'}")
     if error := st.session_state.get(REVIEWER_ERROR_KEY):
         st.error(error)
-    if result.notice:
-        st.warning(result.notice)
+    render_reviewer_result(result)
     # The task's own developer is never offered as a reviewer.
     names = [s.name for s in result.scores if s.name != task.assigned_developer]
     st.selectbox(
@@ -204,7 +219,7 @@ def _render_reviewer_reassignment(
         disabled=not names,
     )
     key = _reviewer_key(task, rec)
-    confirm, cancel = st.columns(2)
+    confirm, cancel = button_row(2)
     confirm.button(
         "Confirm reviewer",
         type="primary",
@@ -227,7 +242,9 @@ def _render_reviews(
         if not rec.labelled:
             st.caption("The labels have not been added to GitHub yet.")
         # The scores explain the original recommendation, which stays as it was.
-        render_scores(rec.candidates, rec.recommended_reviewer, rec.notice, "reviewer")
+        render_recommendation(
+            rec.recommended_reviewer, rec.notice, "reviewer", rec.reasoning
+        )
         if rec.previous_reviewers:
             st.markdown(f"**Current reviewer:** {rec.reviewer or 'none'}")
             st.markdown("**Reviewer history**")
@@ -236,12 +253,45 @@ def _render_reviews(
                     f"- {item.reviewer}: {_date(item.assigned_at)} to "
                     f"{_date(item.unassigned_at)}"
                 )
-        if rec.pr_state not in (None, "open"):
-            continue  # closed or merged: the reviewer can no longer change
-        if st.session_state.get(REVIEWER_TASK_KEY) == _reviewer_key(task, rec):
-            _render_reviewer_reassignment(services, task, rec)
-        else:
-            st.button(
+
+
+def _open_reviews(
+    reviews: Sequence[ReviewerRecommendation],
+) -> list[ReviewerRecommendation]:
+    """Recommendations whose pull request can still change reviewer."""
+    return [rec for rec in reviews if rec.pr_state in (None, "open")]
+
+
+def _render_actions(
+    services: TaskServices,
+    task: Task,
+    reviews: Sequence[ReviewerRecommendation],
+) -> None:
+    """Show "Re-assign developer" and "Re-assign reviewer" side by side.
+
+    A button is replaced by its own form while that form is open (only one form
+    is open at a time), and the form is drawn below the row of buttons.
+    """
+    developer_open = st.session_state.get(REASSIGN_TASK_KEY) == task.id
+    reviewer_open = st.session_state.get(REVIEWER_TASK_KEY)
+    show_developer = bool(task.assigned_developer) and not developer_open
+    pending = [
+        rec
+        for rec in _open_reviews(reviews)
+        if reviewer_open != _reviewer_key(task, rec)
+    ]
+    count = int(show_developer) + len(pending)
+    if count:
+        columns = iter(button_row(count))
+        if show_developer:
+            next(columns).button(
+                "Re-assign developer",
+                key=f"reassign_{task.id}",
+                on_click=_open_reassignment,
+                args=(services, task),
+            )
+        for rec in pending:
+            next(columns).button(
                 "Re-assign reviewer",
                 key=f"reassign_reviewer_{_reviewer_key(task, rec)}",
                 on_click=_open_reviewer_reassignment,
@@ -251,6 +301,11 @@ def _render_reviews(
                 if services.reassign_reviewer is None
                 else None,
             )
+    if developer_open and task.assigned_developer:
+        _render_reassignment(services, task)
+    for rec in _open_reviews(reviews):
+        if reviewer_open == _reviewer_key(task, rec):
+            _render_reviewer_reassignment(services, task, rec)
 
 
 def _render_task(
@@ -277,17 +332,7 @@ def _render_task(
         if reviews:
             st.markdown("**Reviewer recommendation**")
             _render_reviews(services, task, reviews)
-        if not task.assigned_developer:
-            return
-        if st.session_state.get(REASSIGN_TASK_KEY) == task.id:
-            _render_reassignment(services, task)
-        else:
-            st.button(
-                "Re-assign",
-                key=f"reassign_{task.id}",
-                on_click=_open_reassignment,
-                args=(services, task),
-            )
+        _render_actions(services, task, reviews)
 
 
 def render_task_overview(services: TaskServices) -> None:

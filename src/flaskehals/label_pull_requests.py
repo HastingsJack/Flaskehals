@@ -18,7 +18,8 @@ not stop the others, except a GitHub rate limit, which stops the run.
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 
 from dotenv import load_dotenv
 from neo4j import Driver
@@ -33,8 +34,10 @@ from flaskehals.github import (
     RateLimitError,
     load_github_config,
 )
+from flaskehals.llm_recommendation import Complete, decide_with_llm
 from flaskehals.models import Task
 from flaskehals.pr_planning import (
+    PullRequestPlan,
     Skipped,
     label_changes,
     plan_pull_request,
@@ -47,6 +50,7 @@ from flaskehals.reviewer_recommendations import (
     mark_labelled,
     save_recommendation,
 )
+from flaskehals.specification import load_openrouter_config, request_completion
 from flaskehals.tasks import fetch_developer_profiles, fetch_tasks
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,28 @@ def _apply_labels(
     client.add_labels(pr.number, add)
 
 
+def _let_llm_decide(
+    plan: PullRequestPlan,
+    profiles: list[DeveloperProfile],
+    complete: Complete | None,
+) -> PullRequestPlan:
+    """Replace the rule-based reviewer with the model's choice when it gives one.
+
+    The task's developer is excluded, so they can never become the reviewer.
+    On any failure the rule-based plan is kept, with a notice saying why.
+    """
+    assignment = decide_with_llm(
+        complete,
+        "reviewer",
+        profiles,
+        plan.task.title,
+        plan.task.specification,
+        plan.assignment,
+        exclude=plan.developer,
+    )
+    return replace(plan, reviewer=assignment.recommended, assignment=assignment)
+
+
 def _process(
     client: GitHubClient,
     driver: Driver,
@@ -78,6 +104,7 @@ def _process(
     tasks: list[Task],
     profiles: list[DeveloperProfile],
     stored: list[ReviewerRecommendation],
+    complete: Complete | None = None,
 ) -> bool:
     """Handle one pull request. Returns True if it was labelled, False if skipped."""
     plan = plan_pull_request(pr, tasks, profiles)
@@ -87,6 +114,7 @@ def _process(
     if existing is not None and existing.labelled:
         return False
     if existing is None:
+        plan = _let_llm_decide(plan, profiles, complete)
         save_recommendation(driver, pr, plan)
         developer, reviewer = plan.developer, plan.reviewer
     else:
@@ -97,8 +125,14 @@ def _process(
     return True
 
 
-def label_pull_requests(client: GitHubClient, driver: Driver) -> LabelResult:
-    """Process every open pull request. Raises if GitHub or Neo4j cannot be read."""
+def label_pull_requests(
+    client: GitHubClient, driver: Driver, complete: Complete | None = None
+) -> LabelResult:
+    """Process every open pull request. Raises if GitHub or Neo4j cannot be read.
+
+    ``complete`` asks the language model to choose the reviewer; without it the
+    rule-based recommendation is used.
+    """
     # Read everything before changing anything.
     numbers = client.list_pull_request_numbers("open")
     tasks = fetch_tasks(driver)
@@ -109,7 +143,7 @@ def label_pull_requests(client: GitHubClient, driver: Driver) -> LabelResult:
     for number in numbers:
         try:
             pr = client.get_pull_request(number)
-            if _process(client, driver, pr, tasks, profiles, stored):
+            if _process(client, driver, pr, tasks, profiles, stored, complete):
                 labelled += 1
             else:
                 skipped += 1
@@ -140,9 +174,20 @@ def main() -> int:
         )
         return 1
 
+    openrouter = load_openrouter_config()
+    complete = (
+        partial(request_completion, openrouter, purpose="recommendation")
+        if openrouter
+        else None
+    )
+    if complete is None:
+        logger.warning(
+            "OPENROUTER_API_KEY is not set: using the rule-based reviewer ranking."
+        )
+
     try:
         with GitHubClient(github_config) as client, open_driver(neo4j_config) as driver:
-            result = label_pull_requests(client, driver)
+            result = label_pull_requests(client, driver, complete)
     except GitHubError as exc:
         logger.error("Could not read pull requests, nothing was changed: %s", exc)
         return 1
