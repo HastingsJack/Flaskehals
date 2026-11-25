@@ -69,6 +69,15 @@ def label_changes(
     return tuple(add), tuple(remove)
 
 
+def reviewer_label_changes(
+    current: Iterable[str], reviewer: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(labels to add, labels to remove) so ``reviewer`` is the only ``reviewer:``
+    label. Every other label, including ``dev:``, is left alone."""
+    add, remove = _label_changes(current, REVIEWER_PREFIX, REVIEWER_PREFIX + reviewer)
+    return tuple(add), tuple(remove)
+
+
 def plan_pull_request(
     pr: PullRequest,
     tasks: Sequence[Task],

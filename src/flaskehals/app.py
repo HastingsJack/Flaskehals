@@ -23,6 +23,8 @@ from flaskehals.db import (
 )
 from flaskehals.developer_graph import DeveloperGraph, fetch_developer_graph
 from flaskehals.developers import DeveloperOverview, fetch_developer_overview
+from flaskehals.github import GitHubClient, load_github_config
+from flaskehals.reviewer_reassignment import reassign_reviewer
 from flaskehals.reviewer_recommendations import fetch_recommendations
 from flaskehals.specification import generate_specification, load_openrouter_config
 from flaskehals.task_creation_page import keep_draft_state, render_task_creation
@@ -41,6 +43,9 @@ ERROR_KEY = "login_error"
 LOGIN_ERROR_MESSAGE = "Invalid username or password."
 CONFIG_ERROR_MESSAGE = (
     "Authentication is not configured. Set AUTH_USERNAME and AUTH_PASSWORD_HASH."
+)
+GITHUB_CONFIG_ERROR_MESSAGE = (
+    "GitHub is not configured. Set GITHUB_TOKEN and GITHUB_REPOSITORY."
 )
 NEO4J_CONFIG_ERROR_MESSAGE = (
     "Neo4j is not configured. Set NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD."
@@ -79,6 +84,24 @@ def load_developer_graph(name: str) -> DeveloperGraph | None:
     return neo4j_call(fetch_developer_graph, name)
 
 
+def reassign_reviewer_on_github(
+    task_id: str, pr_number: int, new_reviewer: str, expected_current: str
+) -> None:
+    """Change the reviewer in GitHub and Neo4j. Needs GITHUB_TOKEN to be set."""
+    config = load_github_config()
+    if config is None:
+        raise DataStoreError(GITHUB_CONFIG_ERROR_MESSAGE)
+    with GitHubClient(config) as client:
+        neo4j_call(
+            reassign_reviewer,
+            client,
+            task_id,
+            pr_number,
+            new_reviewer,
+            expected_current,
+        )
+
+
 def build_task_services() -> TaskServices:
     openrouter = load_openrouter_config()
     return TaskServices(
@@ -88,6 +111,9 @@ def build_task_services() -> TaskServices:
         load_tasks=partial(neo4j_call, fetch_tasks),
         reassign_task=partial(neo4j_call, reassign_task),
         load_recommendations=partial(neo4j_call, fetch_recommendations),
+        reassign_reviewer=(
+            reassign_reviewer_on_github if load_github_config() else None
+        ),
     )
 
 

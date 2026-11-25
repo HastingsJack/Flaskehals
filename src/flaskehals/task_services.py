@@ -28,6 +28,9 @@ class TaskServices:
     # (task id, new developer, assignee the caller saw)
     reassign_task: Callable[[str, str, str], None]
     load_recommendations: Callable[[], list[ReviewerRecommendation]]
+    # (task id, pull request number, new reviewer, reviewer the caller saw);
+    # None when GitHub is not configured, so the button is disabled.
+    reassign_reviewer: Callable[[str, int, str, str], None] | None = None
 
 
 def evaluate(
