@@ -12,7 +12,12 @@ from neo4j.exceptions import DriverError, Neo4jError
 
 from flaskehals.auth import load_auth_config, verify_credentials
 from flaskehals.dashboard import render_developer_overview
-from flaskehals.developers import DeveloperOverview, fetch_developer_overview
+from flaskehals.developers import (
+    DeveloperGraph,
+    DeveloperOverview,
+    fetch_developer_graph,
+    fetch_developer_overview,
+)
 from flaskehals.graph import Neo4jConfig, load_neo4j_config
 from flaskehals.specification import generate_specification, load_openrouter_config
 from flaskehals.task_page import (
@@ -66,6 +71,10 @@ def load_developers() -> list[DeveloperOverview] | None:
         return None
 
 
+def load_developer_graph(name: str) -> DeveloperGraph | None:
+    return neo4j_call(lambda driver, db: fetch_developer_graph(driver, name, db))
+
+
 def build_task_services() -> TaskServices:
     openrouter = load_openrouter_config()
 
@@ -111,7 +120,7 @@ def render_dashboard() -> None:
     st.title("Dashboard")
     developers = load_developers()
     if developers is not None:
-        render_developer_overview(developers)
+        render_developer_overview(developers, load_developer_graph)
 
 
 def render_new_task() -> None:

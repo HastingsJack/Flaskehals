@@ -13,6 +13,7 @@ dependencies = [
     "neo4j>=6.4.1",
     "python-dotenv>=1.2.4",
     "streamlit>=1.67.0",
+    "streamlit-agraph>=0.0.45",
 ]
 
 [project.scripts]
