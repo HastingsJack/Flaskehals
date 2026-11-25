@@ -1,11 +1,15 @@
-"""Read-only GitHub REST client for pull requests and their comments."""
+"""GitHub REST client: reads pull requests and comments, and edits PR labels.
+
+The only write operations are adding and removing labels.
+"""
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Self
+from urllib.parse import quote
 
 import httpx
 
@@ -53,6 +57,7 @@ class PullRequest:
     deletions: int
     changed_files: int
     labels: tuple[str, ...]
+    head_ref: str = ""  # source branch name, e.g. "feat/task-1"
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,7 @@ def _parse_pull_request(data: dict[str, Any]) -> PullRequest:
         deletions=data["deletions"],
         changed_files=data["changed_files"],
         labels=tuple(label["name"] for label in data.get("labels", [])),
+        head_ref=str((data.get("head") or {}).get("ref", "")),
     )
 
 
@@ -125,7 +131,8 @@ class GitHubClient:
     """Fetches pull request data for one repository.
 
     Any failure raises GitHubError immediately; there are no automatic
-    retries, so a rate limit stops all further requests.
+    retries, so a rate limit stops all further requests. The only writes are
+    adding and removing labels.
     """
 
     def __init__(
@@ -155,13 +162,23 @@ class GitHubClient:
     def _get(
         self, url: str, params: dict[str, str | int] | None = None
     ) -> httpx.Response:
+        return self._send("GET", url, params=params)
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, str | int] | None = None,
+        json: dict[str, Any] | None = None,
+        allow_not_found: bool = False,
+    ) -> httpx.Response:
         try:
-            response = self._http.get(url, params=params)
+            response = self._http.request(method, url, params=params, json=json)
         except httpx.HTTPError as exc:
             raise GitHubError(f"Could not reach GitHub: {exc}") from exc
         if _is_rate_limited(response):
             raise RateLimitError(_reset_time(response))
-        if response.is_error:
+        if response.is_error and not (allow_not_found and response.status_code == 404):
             raise GitHubError(
                 f"GitHub returned {response.status_code} for {response.request.url}"
             )
@@ -188,9 +205,9 @@ class GitHubClient:
             params = None
         return items
 
-    def list_pull_request_numbers(self) -> list[int]:
-        """Numbers of all pull requests, open and closed."""
-        items = self._get_all_pages(f"/repos/{self.repository}/pulls", {"state": "all"})
+    def list_pull_request_numbers(self, state: str = "all") -> list[int]:
+        """Numbers of pull requests: "all" (default), "open" or "closed"."""
+        items = self._get_all_pages(f"/repos/{self.repository}/pulls", {"state": state})
         return [item["number"] for item in items]
 
     def get_pull_request(self, number: int) -> PullRequest:
@@ -204,3 +221,21 @@ class GitHubClient:
             f"/repos/{self.repository}/issues/{number}/comments"
         )
         return [_parse_comment(item) for item in items]
+
+    def add_labels(self, number: int, labels: Sequence[str]) -> None:
+        """Add labels to a pull request (labels are created if missing)."""
+        if not labels:
+            return
+        self._send(
+            "POST",
+            f"/repos/{self.repository}/issues/{number}/labels",
+            json={"labels": list(labels)},
+        )
+
+    def remove_label(self, number: int, label: str) -> None:
+        """Remove one label from a pull request. A label already gone is fine."""
+        self._send(
+            "DELETE",
+            f"/repos/{self.repository}/issues/{number}/labels/{quote(label, safe='')}",
+            allow_not_found=True,
+        )

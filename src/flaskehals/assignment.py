@@ -161,9 +161,16 @@ def extract_keywords(text: str) -> frozenset[str]:
 
 
 def recommend_developer(
-    profiles: list[DeveloperProfile], title: str, specification: str
+    profiles: list[DeveloperProfile],
+    title: str,
+    specification: str,
+    exclude: str | None = None,
 ) -> AssignmentResult:
-    """Rank developers for a task and recommend the best suitable one."""
+    """Rank developers for a task and recommend the best suitable one.
+
+    ``exclude`` (the current assignee when re-assigning) is still scored and
+    shown, but is never the recommendation.
+    """
     if not profiles:
         return AssignmentResult(
             scores=(),
@@ -188,8 +195,8 @@ def recommend_developer(
         ),
         key=lambda score: (-score.total, score.name.lower(), score.name),
     )
-    best = scores[0]
-    if best.total <= 0:
+    best = next((score for score in scores if score.name != exclude), None)
+    if best is None or best.total <= 0:
         return AssignmentResult(
             scores=tuple(scores),
             recommended=None,

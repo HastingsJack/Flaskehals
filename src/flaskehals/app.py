@@ -19,6 +19,7 @@ from flaskehals.developers import (
     fetch_developer_overview,
 )
 from flaskehals.graph import Neo4jConfig, load_neo4j_config
+from flaskehals.reviewer_recommendations import fetch_recommendations
 from flaskehals.specification import generate_specification, load_openrouter_config
 from flaskehals.task_page import (
     TaskServices,
@@ -30,6 +31,7 @@ from flaskehals.tasks import (
     DataStoreError,
     fetch_developer_profiles,
     fetch_tasks,
+    reassign_task,
     save_approved_task,
 )
 from flaskehals.theme import apply_background
@@ -91,6 +93,10 @@ def build_task_services() -> TaskServices:
             lambda driver, db: save_approved_task(driver, task, db)
         ),
         load_tasks=lambda: neo4j_call(fetch_tasks),
+        load_recommendations=lambda: neo4j_call(fetch_recommendations),
+        reassign_task=lambda task_id, developer, current: neo4j_call(
+            lambda driver, db: reassign_task(driver, task_id, developer, current, db)
+        ),
     )
 
 

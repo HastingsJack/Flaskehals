@@ -1,7 +1,9 @@
 """An in-memory fake of the GitHub REST endpoints used by the sync."""
 
+import json
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
@@ -52,6 +54,8 @@ class FakeGitHub:
         self.pulls = pulls or []
         self.comments = comments or {}
         self.requests: list[httpx.Request] = []
+        # Label edits: ("add", pr number, [labels]) or ("remove", pr number, label)
+        self.label_edits: list[tuple[str, int, Any]] = []
         # Set to make every request return this response instead.
         self.override: Callable[[httpx.Request], httpx.Response] | None = None
 
@@ -61,7 +65,22 @@ class FakeGitHub:
             return self.override(request)
         path = request.url.path
         if path == f"/repos/{REPO}/pulls":
-            return httpx.Response(200, json=self.pulls)
+            state = request.url.params.get("state", "all")
+            return httpx.Response(
+                200,
+                json=[p for p in self.pulls if state == "all" or p["state"] == state],
+            )
+        labels_prefix = f"/repos/{REPO}/issues/"
+        if path.startswith(labels_prefix) and "/labels" in path:
+            number = int(path[len(labels_prefix) :].split("/")[0])
+            if request.method == "POST":
+                body = json.loads(request.content)
+                self.label_edits.append(("add", number, body["labels"]))
+                return httpx.Response(200, json=[])
+            if request.method == "DELETE":
+                label = unquote(path.split("/labels/", 1)[1])
+                self.label_edits.append(("remove", number, label))
+                return httpx.Response(200, json=[])
         for pr in self.pulls:
             if path == f"/repos/{REPO}/pulls/{pr['number']}":
                 return httpx.Response(200, json=pr)

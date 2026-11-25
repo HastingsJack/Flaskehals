@@ -1,5 +1,6 @@
 """Neo4j persistence for tasks (features/task-creation-developer-assignment.feature)."""
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,10 +8,12 @@ import pytest
 from flaskehals.assignment import DeveloperProfile
 from flaskehals.tasks import (
     NewTask,
+    ReassignmentError,
     Task,
     TaskSaveError,
     fetch_developer_profiles,
     fetch_tasks,
+    reassign_task,
     save_approved_task,
 )
 
@@ -66,7 +69,7 @@ def test_save_propagates_database_errors() -> None:
 
 
 def test_fetch_tasks_maps_records() -> None:
-    row = {
+    row: dict[str, Any] = {
         "id": "1",
         "title": "T",
         "description": "D",
@@ -112,3 +115,61 @@ def test_fetch_developer_profiles_maps_records_and_drops_null_history() -> None:
         DeveloperProfile("Hans", 1, 2, 3, "senior", ("Fix login", "python")),
         DeveloperProfile("New"),
     ]
+
+
+# --- Re-assignment (features/tasks/task-reassignment.feature) ---------------
+
+
+def reassign_with(state: dict[str, str | None] | None) -> tuple[MagicMock, MagicMock]:
+    tx = MagicMock()
+    tx.run.return_value.single.return_value = state
+    session = MagicMock()
+    session.execute_write.side_effect = lambda work: work(tx)
+    driver = MagicMock()
+    driver.session.return_value.__enter__.return_value = session
+    return driver, tx
+
+
+def test_reassign_moves_assignment_in_one_transaction() -> None:
+    driver, tx = reassign_with({"current": "Peter", "target": "Hans"})
+    reassign_task(driver, "1", "Hans", "Peter", "db")
+    assert tx.run.call_count == 2
+    write_query = tx.run.call_args_list[1].args[0]
+    assert "PREVIOUSLY_ASSIGNED_TO" in write_query and "DELETE" in write_query
+    assert tx.run.call_args_list[1].kwargs == {"task_id": "1", "new_developer": "Hans"}
+
+
+@pytest.mark.parametrize(
+    ("state", "expected", "message"),
+    [
+        (None, "Peter", "no longer exists"),
+        ({"current": "Peter", "target": "Peter"}, "Peter", "already assigned"),
+        ({"current": "Zed", "target": "Hans"}, "Peter", "now assigned to Zed"),
+        ({"current": "Peter", "target": None}, "Peter", "Developer 'Hans'"),
+    ],
+)
+def test_reassign_refuses_invalid_changes_without_writing(
+    state: dict[str, str | None] | None, expected: str, message: str
+) -> None:
+    new = "Peter" if state and state["target"] == "Peter" else "Hans"
+    driver, tx = reassign_with(state)
+    with pytest.raises(ReassignmentError, match=message):
+        reassign_task(driver, "1", new, expected)
+    assert tx.run.call_count == 1  # only the read; nothing written
+
+
+def test_fetch_tasks_orders_previous_assignments_chronologically() -> None:
+    record = MagicMock()
+    record.data.return_value = {
+        "id": "1", "title": "t", "description": "d", "specification": "s",
+        "status": "approved", "recommended_developer": None,
+        "assigned_developer": "C", "created_at": "2026-01-01",
+        "previous_assignments": [
+            {"developer": "B", "assigned_at": "2026-01-02", "unassigned_at": "2026-01-03"},
+            {"developer": "A", "assigned_at": "2026-01-01", "unassigned_at": "2026-01-02"},
+        ],
+    }  # fmt: skip
+    driver = MagicMock()
+    driver.execute_query.return_value = ([record], None, None)
+    (task,) = fetch_tasks(driver)
+    assert [p.developer for p in task.previous_assignments] == ["A", "B"]

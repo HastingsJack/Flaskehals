@@ -120,3 +120,29 @@ def test_ranking_is_deterministic_and_ties_break_by_name() -> None:
     second = recommend_developer(list(reversed(profiles)), "T", SPEC)
     assert first == second
     assert first.recommended == "Adam"
+
+
+def test_excluded_developer_is_scored_but_never_recommended() -> None:
+    result = recommend_developer(
+        [
+            DeveloperProfile(
+                "Current",
+                open_pull_requests=1,
+                history_texts=("Add Postgres CSV export",),
+            ),
+            DeveloperProfile("Other"),
+        ],
+        "Invoices",
+        SPEC,
+        exclude="Current",
+    )
+    assert result.recommended == "Other"
+    assert {s.name for s in result.scores} == {"Current", "Other"}
+
+
+def test_only_excluded_developer_means_no_recommendation() -> None:
+    result = recommend_developer(
+        [DeveloperProfile("Current")], "Invoices", SPEC, exclude="Current"
+    )
+    assert result.recommended is None
+    assert result.notice

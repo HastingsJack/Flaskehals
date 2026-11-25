@@ -9,8 +9,9 @@ from streamlit.testing.v1 import AppTest
 from streamlit.testing.v1.element_tree import Button
 
 from flaskehals.assignment import DeveloperProfile
+from flaskehals.reviewer_recommendations import ReviewerRecommendation
 from flaskehals.specification import SpecificationError
-from flaskehals.tasks import NewTask, Task
+from flaskehals.tasks import NewTask, PreviousAssignment, Task
 
 APP_PATH = str(Path(__file__).parents[1] / "src" / "flaskehals" / "app.py")
 
@@ -33,6 +34,9 @@ class Fakes:
         self.generate_calls: list[tuple[str, str, str | None, str | None]] = []
         self.saved: list[NewTask] = []
         self.tasks: list[Task] = []
+        self.recommendations: list[ReviewerRecommendation] = []
+        self.reassign_error: Exception | None = None
+        self.reassigned: list[tuple[str, str, str | None]] = []
         monkeypatch.setattr(
             "flaskehals.specification.generate_specification", self.generate
         )
@@ -41,6 +45,11 @@ class Fakes:
         )
         monkeypatch.setattr("flaskehals.tasks.save_approved_task", self.save)
         monkeypatch.setattr("flaskehals.tasks.fetch_tasks", lambda *a: self.tasks)
+        monkeypatch.setattr("flaskehals.tasks.reassign_task", self.reassign)
+        monkeypatch.setattr(
+            "flaskehals.reviewer_recommendations.fetch_recommendations",
+            lambda *a: self.recommendations,
+        )
         monkeypatch.setattr(
             "flaskehals.developers.fetch_developer_overview", lambda *a: []
         )
@@ -55,6 +64,18 @@ class Fakes:
         if self.profiles_error:
             raise self.profiles_error
         return self.profiles
+
+    def reassign(
+        self,
+        driver: object,
+        task_id: str,
+        developer: str,
+        current: str | None,
+        database: object = None,
+    ) -> None:
+        if self.reassign_error:
+            raise self.reassign_error
+        self.reassigned.append((task_id, developer, current))
 
     def save(self, driver: object, task: NewTask, database: object = None) -> str:
         if self.save_error:
@@ -339,3 +360,119 @@ def test_task_overview_empty_and_failure(
     at = at.run()
     assert any("Neo4j" in e.value for e in at.error)
     assert not at.info
+
+
+# --- Re-assignment (features/tasks/task-reassignment.feature) ---------------
+
+TASK = Task(
+    "1", "CSV export", "Export it", SPEC, "approved", "Peter", "Peter",
+    "2026-11-16T10:00:00Z",
+)  # fmt: skip
+
+
+def reassignment_open(fakes: Fakes) -> AppTest:
+    fakes.tasks = [TASK]
+    at = go_to(open_task_page(), "Tasks")
+    return button(at, "Re-assign").click().run()
+
+
+def test_each_assigned_task_offers_reassign(fakes: Fakes) -> None:
+    fakes.tasks = [TASK]
+    at = go_to(open_task_page(), "Tasks")
+    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+
+
+def test_reassign_panel_shows_current_developer_and_recommends_another(
+    fakes: Fakes,
+) -> None:
+    at = reassignment_open(fakes)
+    box = at.selectbox(key="reassign_developer")
+    assert any("Currently assigned to:** Peter" in m.value for m in at.markdown)
+    assert box.value == "Hans"  # Peter is current; Hans is recommended instead
+    assert any("(current)" in str(o) for o in box.options)
+
+
+def test_confirm_reassigns_to_selected_developer(fakes: Fakes) -> None:
+    at = reassignment_open(fakes)
+    at = button(at, "Confirm re-assignment").click().run()
+    assert fakes.reassigned == [("1", "Hans", "Peter")]
+    assert any("re-assigned from Peter to Hans" in s.value for s in at.success)
+    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+
+
+def test_confirm_without_selection_is_rejected(fakes: Fakes) -> None:
+    at = reassignment_open(fakes)
+    at.selectbox(key="reassign_developer").set_value(None).run()
+    at = button(at, "Confirm re-assignment").click().run()
+    assert fakes.reassigned == []
+    assert any("Select a developer" in e.value for e in at.error)
+
+
+def test_confirm_same_developer_makes_no_change(fakes: Fakes) -> None:
+    at = reassignment_open(fakes)
+    at.selectbox(key="reassign_developer").set_value("Peter").run()
+    at = button(at, "Confirm re-assignment").click().run()
+    assert fakes.reassigned == []
+    assert any("already assigned" in e.value for e in at.error)
+
+
+def test_cancel_leaves_assignment_unchanged(fakes: Fakes) -> None:
+    at = reassignment_open(fakes)
+    at = button(at, "Cancel").click().run()
+    assert fakes.reassigned == []
+    assert [b.label for b in at.button if b.label != "Log out"] == ["Re-assign"]
+
+
+def test_no_suitable_developer_notifies_and_allows_manual_choice(
+    fakes: Fakes,
+) -> None:
+    fakes.profiles = [
+        DeveloperProfile("Peter", open_pull_requests=1),
+        DeveloperProfile("Zed", open_pull_requests=1),
+    ]
+    at = reassignment_open(fakes)
+    assert any("manually" in w.value for w in at.warning)
+    assert at.selectbox(key="reassign_developer").value is None
+    at.selectbox(key="reassign_developer").set_value("Zed").run()
+    at = button(at, "Confirm re-assignment").click().run()
+    assert fakes.reassigned == [("1", "Zed", "Peter")]
+
+
+def test_database_failure_keeps_task_assigned_and_not_reported(
+    fakes: Fakes,
+) -> None:
+    fakes.reassign_error = ServiceUnavailable("down")
+    at = reassignment_open(fakes)
+    at = button(at, "Confirm re-assignment").click().run()
+    assert any("not re-assigned" in e.value for e in at.error)
+    assert not at.success
+    assert any("Currently assigned to:** Peter" in m.value for m in at.markdown)
+
+
+def test_assignment_history_is_listed_in_order(fakes: Fakes) -> None:
+    fakes.tasks = [
+        Task(
+            "1", "CSV export", "Export it", SPEC, "approved", "Peter", "Hans",
+            "2026-11-16T10:00:00Z",
+            (
+                PreviousAssignment("Hans", "2026-11-16T10:00:00Z", "2026-11-17T10:00:00Z"),
+                PreviousAssignment("Zed", "2026-11-17T10:00:00Z", "2026-11-18T10:00:00Z"),
+            ),
+        )
+    ]  # fmt: skip
+    at = go_to(open_task_page(), "Tasks")
+    lines = [m.value for m in at.markdown if m.value.startswith("- ")]
+    assert lines == [
+        "- Hans: 2026-11-16 to 2026-11-17",
+        "- Zed: 2026-11-17 to 2026-11-18",
+    ]
+
+
+def test_reassignment_notice_is_not_kept_after_leaving_the_page(
+    fakes: Fakes,
+) -> None:
+    at = reassignment_open(fakes)
+    at = button(at, "Confirm re-assignment").click().run()
+    assert at.success
+    at = go_to(go_to(at, "Dashboard"), "Tasks")
+    assert not at.success

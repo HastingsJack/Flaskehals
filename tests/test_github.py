@@ -143,3 +143,56 @@ def test_pagination_is_capped() -> None:
     with fake.client() as client, pytest.raises(GitHubError, match="Stopped after"):
         client.list_pull_request_numbers()
     assert len(fake.requests) == MAX_PAGES
+
+
+def test_list_open_pull_requests_only() -> None:
+    fake = FakeGitHub([pr_json(1), pr_json(2, state="closed")])
+    with fake.client() as client:
+        assert client.list_pull_request_numbers("open") == [1]
+    assert fake.requests[0].url.params["state"] == "open"
+
+
+def test_pull_request_branch_is_read() -> None:
+    fake = FakeGitHub([pr_json(1, head={"ref": "feat/task-1"}), pr_json(2)])
+    with fake.client() as client:
+        assert client.get_pull_request(1).head_ref == "feat/task-1"
+        assert client.get_pull_request(2).head_ref == ""
+
+
+def test_add_and_remove_labels() -> None:
+    fake = FakeGitHub([pr_json(1)])
+    with fake.client() as client:
+        client.add_labels(1, ["dev:Hans", "reviewer:Peter"])
+        client.remove_label(1, "reviewer:Bob")
+    assert fake.label_edits == [
+        ("add", 1, ["dev:Hans", "reviewer:Peter"]),
+        ("remove", 1, "reviewer:Bob"),
+    ]
+    assert "%3A" in str(fake.requests[1].url)  # label name is URL-encoded
+
+
+def test_adding_no_labels_makes_no_request() -> None:
+    fake = FakeGitHub([pr_json(1)])
+    with fake.client() as client:
+        client.add_labels(1, [])
+    assert fake.requests == []
+
+
+def test_removing_a_label_that_is_already_gone_is_not_an_error() -> None:
+    fake = FakeGitHub()
+    fake.override = lambda request: httpx.Response(404, json={"message": "Not Found"})
+    with fake.client() as client:
+        client.remove_label(1, "dev:Hans")
+
+
+def test_label_write_failures_raise() -> None:
+    fake = FakeGitHub()
+    fake.override = lambda request: httpx.Response(403, json={})
+    with fake.client() as client, pytest.raises(GitHubError):
+        client.add_labels(1, ["dev:Hans"])
+    rate = FakeGitHub()
+    rate.override = lambda request: httpx.Response(
+        403, headers={"x-ratelimit-remaining": "0"}
+    )
+    with rate.client() as client, pytest.raises(RateLimitError):
+        client.add_labels(1, ["dev:Hans"])
