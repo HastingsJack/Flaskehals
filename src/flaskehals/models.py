@@ -6,6 +6,8 @@ numbers, reviewer planning) do not have to import the Neo4j module.
 
 from dataclasses import dataclass
 
+from flaskehals.pr_status import PullRequestStatus
+
 
 @dataclass(frozen=True)
 class PreviousAssignment:
@@ -35,3 +37,4 @@ class Task:
     created_at: str
     previous_assignments: tuple[PreviousAssignment, ...] = ()
     number: int | None = None  # global, shown as "Task-N"
+    pull_request_statuses: tuple[PullRequestStatus, ...] = ()

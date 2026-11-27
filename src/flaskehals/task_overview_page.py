@@ -12,6 +12,13 @@ from flaskehals.db import DataStoreError
 from flaskehals.developer_scoring import AssignmentResult
 from flaskehals.layout import button_row
 from flaskehals.models import Task
+from flaskehals.pr_status import (
+    PullRequestStatus,
+    escape_markdown,
+    format_status,
+    format_task_status,
+    summarise,
+)
 from flaskehals.reviewer_recommendations import ReviewerRecommendation
 from flaskehals.score_view import (
     render_developer_result,
@@ -36,6 +43,10 @@ REVIEWER_ERROR_KEY = "reassign_reviewer_error"
 NO_TASKS_MESSAGE = "No approved tasks yet."
 NO_MATCH_MESSAGE = "No task found."
 REASSIGNED_MESSAGE = "Task '{title}' re-assigned from {old} to {new}."
+LABELS_NOT_UPDATED_MESSAGE = (
+    " The pull request labels were not updated on GitHub: GitHub is not "
+    "configured (set GITHUB_TOKEN and GITHUB_REPOSITORY)."
+)
 REVIEWER_REASSIGNED_MESSAGE = (
     "Reviewer of pull request #{number} changed from {old} to {new}."
 )
@@ -52,17 +63,39 @@ def _label(task: Task) -> str:
     return f"{format_task_number(task.number)} - {task.title}"
 
 
+def expander_title(task: Task) -> str:
+    """Expander title: ``Task-1 - title - developer [Status]``, status coloured.
+
+    The status is the pull request status; a task without a pull request shows
+    its own stored status (e.g. ``approved``), so a status is always shown.
+    """
+    assignee = task.assigned_developer or "unassigned"
+    status, count = summarise(task.pull_request_statuses)
+    text = escape_markdown(f"{_label(task)} - {assignee}")
+    if status is PullRequestStatus.NO_PR:
+        return f"{text} {format_task_status(task.status)}"
+    return f"{text} {format_status(status, count)}"
+
+
 def _date(timestamp: str) -> str:
     """The date part of an ISO timestamp (the time is not shown)."""
     return timestamp[:10]
 
 
-# --- Re-assignment ------------------------------------------------------------
-
-
-def _open_reassignment(services: TaskServices, task: Task) -> None:
+def _open_reassignment(
+    services: TaskServices, task: Task, reviews: Sequence[ReviewerRecommendation]
+) -> None:
     _close_reassignment()
-    result = evaluate(services, task.title, task.specification, task.assigned_developer)
+    # Who reviews the task's open pull requests: the model is nudged to prefer
+    # a developer who would not review their own code. Not enforced.
+    reviewers = [rec.reviewer for rec in _open_reviews(reviews) if rec.reviewer]
+    result = evaluate(
+        services,
+        task.title,
+        task.specification,
+        task.assigned_developer,
+        reviewers=reviewers,
+    )
     st.session_state[REASSIGN_TASK_KEY] = task.id
     st.session_state[REASSIGN_RESULT_KEY] = result
     st.session_state[REASSIGN_DEVELOPER_KEY] = result.recommended
@@ -83,7 +116,9 @@ def _close_reassignment() -> None:
         st.session_state.pop(key, None)
 
 
-def _confirm_reassignment(services: TaskServices, task: Task) -> None:
+def _confirm_reassignment(
+    services: TaskServices, task: Task, reviews: Sequence[ReviewerRecommendation]
+) -> None:
     st.session_state.pop(REASSIGN_ERROR_KEY, None)
     selected = st.session_state.get(REASSIGN_DEVELOPER_KEY)
     if not selected:
@@ -98,12 +133,17 @@ def _confirm_reassignment(services: TaskServices, task: Task) -> None:
         st.session_state[REASSIGN_ERROR_KEY] = f"The task was not re-assigned. {exc}"
         return
     _close_reassignment()
-    st.session_state[REASSIGN_NOTICE_KEY] = REASSIGNED_MESSAGE.format(
+    message = REASSIGNED_MESSAGE.format(
         title=task.title, old=task.assigned_developer, new=selected
     )
+    if not services.github_labels and _open_reviews(reviews):
+        message += LABELS_NOT_UPDATED_MESSAGE
+    st.session_state[REASSIGN_NOTICE_KEY] = message
 
 
-def _render_reassignment(services: TaskServices, task: Task) -> None:
+def _render_reassignment(
+    services: TaskServices, task: Task, reviews: Sequence[ReviewerRecommendation]
+) -> None:
     result: AssignmentResult = st.session_state[REASSIGN_RESULT_KEY]
     st.markdown(f"**Task:** {_label(task)}")
     st.markdown(f"**Currently assigned to:** {task.assigned_developer}")
@@ -128,13 +168,10 @@ def _render_reassignment(services: TaskServices, task: Task) -> None:
         type="primary",
         key=f"confirm_{task.id}",
         on_click=_confirm_reassignment,
-        args=(services, task),
+        args=(services, task, reviews),
         disabled=not names,
     )
     cancel.button("Cancel", key=f"cancel_{task.id}", on_click=_close_reassignment)
-
-
-# --- Task list ----------------------------------------------------------------
 
 
 def _reviewer_key(task: Task, rec: ReviewerRecommendation) -> str:
@@ -288,7 +325,7 @@ def _render_actions(
                 "Re-assign developer",
                 key=f"reassign_{task.id}",
                 on_click=_open_reassignment,
-                args=(services, task),
+                args=(services, task, reviews),
             )
         for rec in pending:
             next(columns).button(
@@ -302,7 +339,7 @@ def _render_actions(
                 else None,
             )
     if developer_open and task.assigned_developer:
-        _render_reassignment(services, task)
+        _render_reassignment(services, task, reviews)
     for rec in _open_reviews(reviews):
         if reviewer_open == _reviewer_key(task, rec):
             _render_reviewer_reassignment(services, task, rec)
@@ -314,7 +351,7 @@ def _render_task(
     reviews: Sequence[ReviewerRecommendation],
 ) -> None:
     assignee = task.assigned_developer or "unassigned"
-    with st.expander(f"{_label(task)} - {assignee}"):
+    with st.expander(expander_title(task)):
         st.markdown(f"**Assigned to:** {assignee}")
         if task.recommended_developer:
             st.markdown(f"**Originally recommended:** {task.recommended_developer}")
@@ -356,7 +393,7 @@ def render_task_overview(services: TaskServices) -> None:
         "Search tasks",
         key=SEARCH_KEY,
         max_chars=MAX_QUERY_LENGTH,
-        placeholder="Task number, title or developer",
+        placeholder="Task number",
     )
     if problem := validate_query(query):
         st.error(problem)

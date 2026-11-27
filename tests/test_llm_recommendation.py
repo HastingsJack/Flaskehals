@@ -63,9 +63,6 @@ def decide(
     return result, sent
 
 
-# --- the decision ---------------------------------------------------------------
-
-
 def test_the_model_chooses_even_against_the_rule_based_ranking() -> None:
     assert baseline().recommended == "Hans"
     result, _ = decide(reply("Peter", "Hans already carries two open PRs."))
@@ -87,9 +84,6 @@ def test_name_match_ignores_case_and_returns_the_known_spelling() -> None:
 def test_reply_in_a_code_fence_is_accepted() -> None:
     result, _ = decide(f"```json\n{reply('Peter')}\n```")
     assert result.recommended == "Peter"
-
-
-# --- what the model is sent ---------------------------------------------------
 
 
 def test_prompt_contains_task_workload_history_level_and_scores() -> None:
@@ -119,9 +113,6 @@ def test_long_history_is_clipped() -> None:
     assert user.count("- xxx") == 15
     assert "+25 older item(s) not shown" in user
     assert "x" * 300 not in user
-
-
-# --- validation and fallback -------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -190,9 +181,6 @@ def test_parse_decision_reports_unknown_names() -> None:
         parse_decision(reply("Mallory"), NAMES, None)
 
 
-# --- wiring: evaluate ----------------------------------------------------------
-
-
 def services(complete: Any, profiles: Any = None) -> TaskServices:
     return TaskServices(
         generate=None,
@@ -231,9 +219,6 @@ def test_evaluate_database_failure_is_a_notice() -> None:
     assert result.recommended is None and result.notice == "Neo4j is unavailable."
 
 
-# --- OpenRouter transport ----------------------------------------------------
-
-
 CONFIG = OpenRouterConfig(api_key="sk-test", base_url="https://example.test/api/v1")
 
 
@@ -250,8 +235,6 @@ def test_request_completion_returns_the_reply() -> None:
     )
     assert request_completion(CONFIG, [], "recommendation", client) == "hi"
 
-
-# --- reviewer labelling command ----------------------------------------------
 
 TASK = Task("u1", "Invoices", "d", SPEC, "approved", "Hans", "Hans", "x", number=1)
 
@@ -306,3 +289,28 @@ def test_label_command_never_labels_the_developer_as_reviewer(
         label_module.label_pull_requests(client, MagicMock(), lambda m: reply("Hans"))
     assert saved[0].reviewer == "Peter"
     assert fake.label_edits == [("add", 5, ["dev:Hans", "reviewer:Peter"])]
+
+
+def test_prompt_names_the_current_reviewers_and_prefers_someone_else() -> None:
+    profiles = [DeveloperProfile("Hans"), DeveloperProfile("Peter")]
+    base = recommend_developer(profiles, "T", "S")
+    messages = build_messages("developer", profiles, "T", "S", base, "Hans", ["Peter"])
+    assert "<current_reviewers>Peter</current_reviewers>" in messages[1]["content"]
+    assert "prefer a developer who is not listed" in messages[0]["content"]
+
+
+def test_no_reviewer_block_without_reviewers() -> None:
+    profiles = [DeveloperProfile("Hans")]
+    base = recommend_developer(profiles, "T", "S")
+    messages = build_messages("developer", profiles, "T", "S", base, None)
+    assert "<current_reviewers>" not in messages[1]["content"]
+
+
+def test_a_reviewer_can_still_be_recommended() -> None:
+    profiles = [DeveloperProfile("Hans"), DeveloperProfile("Peter")]
+    base = recommend_developer(profiles, "T", "S", "Hans")
+    result = decide_with_llm(
+        lambda m: '{"recommended": "Peter", "reasoning": "best fit"}',
+        "developer", profiles, "T", "S", base, "Hans", ["Peter"],
+    )  # fmt: skip
+    assert result.recommended == "Peter" and result.notice is None

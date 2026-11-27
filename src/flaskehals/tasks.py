@@ -13,6 +13,7 @@ stored once approved; rejected tasks are never written.
 """
 
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import LiteralString
 
 from neo4j import Driver, ManagedTransaction
@@ -22,6 +23,7 @@ from flaskehals.db import DataStoreError
 from flaskehals.developer_scoring import DeveloperProfile
 from flaskehals.developers import WORKLOAD_COLUMNS
 from flaskehals.models import NewTask, PreviousAssignment, Task
+from flaskehals.pr_status import classify_rows
 
 TASK_CONSTRAINT: LiteralString = (
     "CREATE CONSTRAINT task_id IF NOT EXISTS FOR (n:Task) REQUIRE n.id IS UNIQUE"
@@ -42,7 +44,6 @@ WITH missing[i] AS t, base + i + 1 AS number
 SET t.number = number
 """
 
-# Number allocation attempts when concurrent saves collide on the unique number.
 _SAVE_ATTEMPTS = 3
 
 # History used for relevance matching: PR titles and technology-like labels
@@ -96,12 +97,17 @@ RETURN t.id AS id,
        t.recommended_developer AS recommended_developer,
        a.name AS assigned_developer,
        toString(t.created_at) AS created_at,
+       [(t)-[:HAS_PULL_REQUEST]->(pr:PullRequest) | {
+           state: pr.state,
+           draft: pr.draft,
+           merged: pr.merged_at IS NOT NULL
+       }] AS pull_requests,
        [(p:Developer)-[r:PREVIOUSLY_ASSIGNED_TO]->(t) | {
            developer: p.name,
            assigned_at: toString(r.assigned_at),
            unassigned_at: toString(r.unassigned_at)
        }] AS previous_assignments
-ORDER BY t.created_at DESC, t.id
+ORDER BY t.number, t.id
 """
 
 # Current assignee and the chosen developer, read inside the write transaction
@@ -125,6 +131,31 @@ DELETE current
 CREATE (old)-[:PREVIOUSLY_ASSIGNED_TO {assigned_at: since, unassigned_at: now}]->(t)
 CREATE (target)-[:ASSIGNED_TO]->(t)
 SET t.assigned_at = now
+"""
+
+# Open (or not yet synced as closed) pull requests linked to a task.
+_OPEN_PULL_REQUESTS: LiteralString = """
+MATCH (:Task {id: $task_id})-[:HAS_PULL_REQUEST]->(p:PullRequest)
+WHERE p.state IS NULL OR p.state = 'open'
+RETURN p.number AS number
+ORDER BY p.number
+"""
+
+# Moves the author of the task's pull requests to the new developer, the same
+# AUTHORED edge the sync derives from the dev: label, so workload is right
+# before the next sync runs.
+_UPDATE_PULL_REQUEST_DEVELOPER: LiteralString = """
+MATCH (t:Task {id: $task_id})-[:HAS_PULL_REQUEST]->(p:PullRequest)
+WHERE p.number IN $numbers
+MATCH (target:Developer {name: $new_developer})
+OPTIONAL MATCH (:Developer)-[old:AUTHORED]->(p)
+DELETE old
+WITH DISTINCT t, p, target
+MERGE (target)-[:AUTHORED]->(p)
+WITH t, p
+OPTIONAL MATCH (t)-[:HAS_REVIEWER_RECOMMENDATION]->
+               (r:ReviewerRecommendation {pr_number: p.number})
+SET r.developer = $new_developer
 """
 
 
@@ -195,7 +226,7 @@ def save_approved_task(driver: Driver, task: NewTask) -> str:
 
 
 def fetch_tasks(driver: Driver) -> list[Task]:
-    """Return all stored tasks, newest first.
+    """Return all stored tasks in numerical order, lowest task number first.
 
     Tasks created before task numbers existed are numbered first.
     """
@@ -211,8 +242,54 @@ def fetch_tasks(driver: Driver) -> list[Task]:
             ),
             key=lambda item: item.unassigned_at,
         )
-        tasks.append(Task(**data, previous_assignments=tuple(previous)))
+        statuses = classify_rows(data.pop("pull_requests", []))
+        tasks.append(
+            Task(
+                **data,
+                previous_assignments=tuple(previous),
+                pull_request_statuses=statuses,
+            )
+        )
     return tasks
+
+
+def check_reassignment(
+    state: Mapping[str, str | None] | None,
+    new_developer: str,
+    expected_current: str | None,
+) -> None:
+    """Raise DataStoreError unless the task may move to ``new_developer``.
+
+    ``state`` is the row from _REASSIGN_STATE; ``expected_current`` is the
+    assignee the caller saw.
+    """
+    if state is None:
+        raise DataStoreError("The task no longer exists.")
+    if state["current"] is None:
+        raise DataStoreError("The task has no current assignee to replace.")
+    if state["current"] != expected_current:
+        raise DataStoreError(
+            f"The task is now assigned to {state['current']}. Reload and try again."
+        )
+    if state["current"] == new_developer:
+        raise DataStoreError(f"{new_developer} is already assigned to this task.")
+    if state["target"] is None:
+        raise DataStoreError(f"Developer '{new_developer}' no longer exists in Neo4j.")
+
+
+def validate_reassignment(
+    driver: Driver, task_id: str, new_developer: str, expected_current: str | None
+) -> None:
+    """Read-only check, so GitHub is only touched for a change that can be saved."""
+    records, _, _ = driver.execute_query(
+        _REASSIGN_STATE, task_id=task_id, new_developer=new_developer
+    )
+    check_reassignment(records[0] if records else None, new_developer, expected_current)
+
+
+def fetch_open_pull_request_numbers(driver: Driver, task_id: str) -> list[int]:
+    records, _, _ = driver.execute_query(_OPEN_PULL_REQUESTS, task_id=task_id)
+    return [record["number"] for record in records]
 
 
 def reassign_task(
@@ -220,34 +297,30 @@ def reassign_task(
     task_id: str,
     new_developer: str,
     expected_current: str | None,
+    pull_requests: Sequence[int] = (),
 ) -> None:
     """Move a task to another developer in a single transaction.
 
     ``expected_current`` is the assignee the caller saw; if the task has since
-    moved, nothing is changed. Raises DataStoreError for an unknown task or
-    developer, an unchanged assignee or a stale view. Neo4j errors propagate,
-    and then nothing was changed.
+    moved, nothing is changed. ``pull_requests`` are the task's pull requests
+    (by number) whose author moves to the new developer too. Raises
+    DataStoreError for an unknown task or developer, an unchanged assignee or a
+    stale view. Neo4j errors propagate, and then nothing was changed.
     """
 
     def work(tx: ManagedTransaction) -> None:
         state = tx.run(
             _REASSIGN_STATE, task_id=task_id, new_developer=new_developer
         ).single()
-        if state is None:
-            raise DataStoreError("The task no longer exists.")
-        if state["current"] is None:
-            raise DataStoreError("The task has no current assignee to replace.")
-        if state["current"] != expected_current:
-            raise DataStoreError(
-                f"The task is now assigned to {state['current']}. Reload and try again."
-            )
-        if state["current"] == new_developer:
-            raise DataStoreError(f"{new_developer} is already assigned to this task.")
-        if state["target"] is None:
-            raise DataStoreError(
-                f"Developer '{new_developer}' no longer exists in Neo4j."
-            )
+        check_reassignment(state, new_developer, expected_current)
         tx.run(_REASSIGN, task_id=task_id, new_developer=new_developer)
+        if pull_requests:
+            tx.run(
+                _UPDATE_PULL_REQUEST_DEVELOPER,
+                task_id=task_id,
+                numbers=list(pull_requests),
+                new_developer=new_developer,
+            )
 
     with driver.session() as session:
         session.execute_write(work)

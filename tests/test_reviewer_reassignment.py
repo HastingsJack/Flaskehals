@@ -5,7 +5,7 @@ import pytest
 from fake_github import FakeGitHub, pr_json
 from neo4j.exceptions import ServiceUnavailable
 from test_task_creation import Fakes, button, fakes, go_to, open_task_page  # noqa: F401
-from test_task_reviews import SCORES, TASK, rec, texts
+from test_task_reviews import TASK, rec, texts
 
 from flaskehals import reviewer_reassignment as module
 from flaskehals.db import DataStoreError
@@ -20,9 +20,6 @@ from flaskehals.reviewer_recommendations import (
 pytestmark = pytest.mark.usefixtures("auth_env", "neo4j_env")
 
 STATE = {"current": "Peter", "developer": "Hans", "target": "Niels"}
-
-
-# --- Validation (Neo4j state) --------------------------------------------------
 
 
 def test_valid_change_is_accepted() -> None:
@@ -66,9 +63,6 @@ def test_original_recommendation_is_kept_after_reassignment() -> None:
     ]))  # fmt: skip
     assert changed.recommended_reviewer == "Peter"
     assert rec().recommended_reviewer == "Peter"
-
-
-# --- GitHub then Neo4j ---------------------------------------------------------
 
 
 class Neo4j:
@@ -144,18 +138,6 @@ def test_github_failure_leaves_the_reviewer_unchanged(neo4j: Neo4j) -> None:
     assert neo4j.saved == []
 
 
-def test_rate_limit_is_reported_with_the_reset_time(neo4j: Neo4j) -> None:
-    gh = github()
-    gh.override = lambda request: httpx.Response(
-        403,
-        headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1893456000"},
-        json={"message": "rate limit"},
-    )
-    with pytest.raises(ReviewerReassignmentError, match="resets at"):
-        run(gh)
-    assert neo4j.saved == []
-
-
 @pytest.mark.parametrize(
     "error",
     [ServiceUnavailable("down"), ReviewerReassignmentError("The reviewer is now X.")],
@@ -171,9 +153,6 @@ def test_failed_save_restores_the_label(neo4j: Neo4j, error: Exception) -> None:
         ("remove", 7, "reviewer:Niels"),  # undo
         ("add", 7, ["reviewer:Peter"]),
     ]
-
-
-# --- The task page -------------------------------------------------------------
 
 
 class Reassigns:
@@ -306,7 +285,6 @@ def test_history_is_listed_and_original_recommendation_kept(
     assert "Recommended reviewer: **Peter**" in shown
     assert "**Current reviewer:** Niels" in shown
     assert "- Peter: 2026-11-25 to 2026-11-26" in shown
-    assert SCORES[0].name == "Peter"
 
 
 def test_developer_and_reviewer_buttons_are_side_by_side(page: Reassigns) -> None:

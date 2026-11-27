@@ -50,9 +50,6 @@ FULL_GRAPH = DeveloperGraph(
 LONELY_GRAPH = DeveloperGraph("d9", (GraphNode("d9", ("Developer",), {}),), ())
 
 
-# --- data layer ---------------------------------------------------------
-
-
 def node_map(node: GraphNode) -> dict[str, object]:
     return {"id": node.id, "labels": list(node.labels), "properties": node.properties}
 
@@ -171,9 +168,6 @@ def test_graph_counts_match_dashboard_workload_counts() -> None:
     assert by_id["t1"].properties["status"] == "approved"
 
 
-# --- graph view ---------------------------------------------------------
-
-
 def test_nodes_with_same_label_share_colour_and_labels_differ() -> None:
     assert label_color("PullRequest") == label_color("PullRequest")
     colours = {label_color(n.labels[0]) for n in FULL_GRAPH.nodes}
@@ -208,8 +202,6 @@ def test_legend_lists_labels_and_relationship_types() -> None:
     assert labels == ["Developer", "Label", "PullRequest", "Task"]
     assert "HAS_LABEL" in types and "AUTHORED" in types
 
-
-# --- dashboard UI -------------------------------------------------------
 
 PEOPLE = [
     DeveloperOverview("Hans", None, 1, 1, 1),

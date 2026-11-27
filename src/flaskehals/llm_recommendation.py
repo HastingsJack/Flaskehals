@@ -18,7 +18,7 @@ against them. No Streamlit code here.
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 
 from flaskehals.developer_scoring import (
@@ -33,7 +33,6 @@ class InvalidDecisionError(Exception):
     """The model's answer cannot be used. The message is safe to show."""
 
 
-# Sends chat messages to the language model and returns its reply text.
 Complete = Callable[[list[dict[str, str]]], str]
 
 MAX_HISTORY_ITEMS = 15
@@ -74,7 +73,12 @@ sentences citing the specific data you relied on>"}}
 Use null for "recommended" only if no listed developer is suitable."""
 
 ROLE_RULES = {
-    "developer": "",
+    "developer": (
+        "If <current_reviewers> is given, those developers review this task's "
+        "pull requests. Reviewers should not review their own code, so prefer a "
+        "developer who is not listed, as long as experience and workload still "
+        "support the choice."
+    ),
     "reviewer": (
         "The task's own developer wrote the code and must never be chosen as reviewer."
     ),
@@ -88,6 +92,7 @@ def build_messages(
     specification: str,
     baseline: AssignmentResult,
     exclude: str | None,
+    reviewers: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """The chat messages: instructions, the task, and one block per developer."""
     scores = {score.name: score for score in baseline.scores}
@@ -104,6 +109,8 @@ def build_messages(
     ]
     if exclude:
         parts.append(f"<excluded>{exclude}</excluded>")
+    if reviewers and role == "developer":
+        parts.append(f"<current_reviewers>{', '.join(reviewers)}</current_reviewers>")
     system = SYSTEM_PROMPT.format(role=role, role_rule=ROLE_RULES.get(role, ""))
     return [
         {"role": "system", "content": system},
@@ -184,6 +191,7 @@ def decide_with_llm(
     specification: str,
     baseline: AssignmentResult,
     exclude: str | None = None,
+    reviewers: Sequence[str] = (),
 ) -> AssignmentResult:
     """Let the model choose; fall back to ``baseline`` when it cannot.
 
@@ -194,7 +202,9 @@ def decide_with_llm(
         return baseline  # nothing to choose from; the baseline already says so
     if complete is None:
         return _fallback(baseline, "not configured")
-    messages = build_messages(role, profiles, title, specification, baseline, exclude)
+    messages = build_messages(
+        role, profiles, title, specification, baseline, exclude, reviewers
+    )
     try:
         reply = complete(messages)
         name, reasoning = parse_decision(reply, [p.name for p in profiles], exclude)

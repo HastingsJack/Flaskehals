@@ -16,46 +16,18 @@ cannot share a transaction, and both failing in a row is rare. If the undo
 itself fails, the next sync reads the label from GitHub back into the graph.
 """
 
-import logging
-
 from neo4j import Driver
 from neo4j.exceptions import DriverError, Neo4jError
 
 from flaskehals.db import UNAVAILABLE_MESSAGE
 from flaskehals.github import GitHubClient, GitHubError
+from flaskehals.github_labels import change_labels, undo_label_changes
 from flaskehals.pr_planning import reviewer_label_changes
 from flaskehals.reviewer_recommendations import (
     ReviewerReassignmentError,
     save_reviewer_change,
     validate_reviewer_change,
 )
-
-logger = logging.getLogger(__name__)
-
-Labels = tuple[str, ...]
-
-
-def _undo(client: GitHubClient, number: int, add: Labels, remove: Labels) -> None:
-    """Put the labels back. Never raises: the original error is the one to report."""
-    try:
-        for label in add:
-            client.remove_label(number, label)
-        client.add_labels(number, remove)
-    except GitHubError as exc:
-        logger.error("Could not restore the labels on #%d: %s", number, exc)
-
-
-def _change_labels(
-    client: GitHubClient, number: int, add: Labels, remove: Labels
-) -> None:
-    """Add first, so a failure never leaves the pull request without a reviewer."""
-    try:
-        client.add_labels(number, add)
-        for label in remove:
-            client.remove_label(number, label)
-    except GitHubError:
-        _undo(client, number, add, remove)
-        raise
 
 
 def reassign_reviewer(
@@ -84,15 +56,15 @@ def reassign_reviewer(
         if pr.state != "open":
             raise ReviewerReassignmentError("The pull request is not open any more.")
         add, remove = reviewer_label_changes(pr.labels, new_reviewer)
-        _change_labels(client, pr_number, add, remove)
+        change_labels(client, pr_number, add, remove)
     except GitHubError as exc:
         raise ReviewerReassignmentError(f"GitHub failed: {exc}") from exc
 
     try:
         save_reviewer_change(driver, task_id, pr_number, new_reviewer, expected_current)
     except (Neo4jError, DriverError) as exc:
-        _undo(client, pr_number, add, remove)
+        undo_label_changes(client, pr_number, add, remove)
         raise ReviewerReassignmentError(UNAVAILABLE_MESSAGE) from exc
     except ReviewerReassignmentError:
-        _undo(client, pr_number, add, remove)
+        undo_label_changes(client, pr_number, add, remove)
         raise

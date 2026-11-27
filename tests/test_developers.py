@@ -8,9 +8,17 @@ import pytest
 from flaskehals.developers import (
     DEFAULT_AVATAR,
     DeveloperOverview,
+    MergeStats,
     fetch_developer_overview,
     resolve_picture,
 )
+
+ZERO_STATS = {
+    "authored_merged_7d": 0,
+    "authored_merged_30d": 0,
+    "commented_merged_7d": 0,
+    "commented_merged_30d": 0,
+}
 
 
 def test_fetch_maps_records_including_assigned_tasks() -> None:
@@ -23,6 +31,7 @@ def test_fetch_maps_records_including_assigned_tasks() -> None:
                 "open_pull_requests": 2,
                 "review_assignments": 1,
                 "assigned_tasks": 2,
+                **ZERO_STATS,
             },
             {
                 "name": "Idle",
@@ -30,6 +39,7 @@ def test_fetch_maps_records_including_assigned_tasks() -> None:
                 "open_pull_requests": 0,
                 "review_assignments": 0,
                 "assigned_tasks": 0,
+                **ZERO_STATS,
             },
         ],
         None,
@@ -66,6 +76,42 @@ def test_resolve_falls_back_to_default(tmp_path: Path, picture: str | None) -> N
     assert resolve_picture(picture, tmp_path) == DEFAULT_AVATAR
 
 
-def test_default_avatar_and_seed_picture_exist() -> None:
+def test_default_avatar_and_bundled_picture_exist() -> None:
     assert DEFAULT_AVATAR.is_file()
     assert resolve_picture("peter.png") != DEFAULT_AVATAR
+
+
+def test_fetch_maps_merge_statistics() -> None:
+    driver = MagicMock()
+    driver.execute_query.return_value = (
+        [
+            {
+                "name": "Hans",
+                "picture": None,
+                "open_pull_requests": 0,
+                "review_assignments": 0,
+                "assigned_tasks": 0,
+                "authored_merged_7d": 1,
+                "authored_merged_30d": 4,
+                "commented_merged_7d": 2,
+                "commented_merged_30d": 5,
+            }
+        ],
+        None,
+        None,
+    )
+    (developer,) = fetch_developer_overview(driver)
+    assert developer.merge_stats == MergeStats(1, 4, 2, 5)
+
+
+def test_merge_statistics_query_definition() -> None:
+    driver = MagicMock()
+    driver.execute_query.return_value = ([], None, None)
+    fetch_developer_overview(driver)
+    query = driver.execute_query.call_args.args[0]
+    assert "merged_at >= datetime() - duration({days: 7})" in query
+    assert "merged_at >= datetime() - duration({days: 30})" in query
+    assert "[:WROTE]->(:Comment)-[:ON]->(p:PullRequest)" in query
+    assert "NOT (d)-[:AUTHORED]->(p)" in query
+    assert query.count("RETURN DISTINCT p") == 2
+    assert not any(w in query for w in ("CREATE", "MERGE (", "SET ", "DELETE"))

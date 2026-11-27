@@ -342,7 +342,9 @@ def test_view_previously_created_tasks(fakes: Fakes) -> None:
     ]
     at = open_task_page()
     at = go_to(at, "Tasks")
-    assert [e.label for e in at.expander] == ["CSV export - Peter"]
+    assert [e.label for e in at.expander] == [
+        "CSV export - Peter :gray-badge[\\[Approved\\]]"
+    ]
     assert any("Hans" in m.value for m in at.markdown)
 
 
@@ -360,8 +362,6 @@ def test_task_overview_empty_and_failure(
     assert any("Neo4j" in e.value for e in at.error)
     assert not at.info
 
-
-# --- Re-assignment (features/tasks/task-reassignment.feature) ---------------
 
 TASK = Task(
     "1", "CSV export", "Export it", SPEC, "approved", "Peter", "Peter",

@@ -115,9 +115,6 @@ def test_fetch_developer_profiles_maps_records_and_drops_null_history() -> None:
     ]
 
 
-# --- Re-assignment (features/tasks/task-reassignment.feature) ---------------
-
-
 def reassign_with(state: dict[str, str | None] | None) -> tuple[MagicMock, MagicMock]:
     tx = MagicMock()
     tx.run.return_value.single.return_value = state
@@ -171,3 +168,10 @@ def test_fetch_tasks_orders_previous_assignments_chronologically() -> None:
     driver.execute_query.return_value = ([record], None, None)
     (task,) = fetch_tasks(driver)
     assert [p.developer for p in task.previous_assignments] == ["A", "B"]
+
+
+def test_fetch_tasks_query_orders_by_task_number() -> None:
+    from flaskehals.tasks import _FETCH_TASKS
+
+    assert "ORDER BY t.number" in _FETCH_TASKS
+    assert "created_at DESC" not in _FETCH_TASKS

@@ -39,43 +39,39 @@ class PullRequestPlan:
 
 
 def _label_changes(
-    current: Iterable[str], prefix: str, wanted: str
-) -> tuple[list[str], list[str]]:
-    """Labels to add and remove so ``wanted`` is the only label with ``prefix``."""
+    current: Iterable[str], prefix: str, name: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(labels to add, labels to remove) so ``prefix + name`` is the only label with ``prefix``."""
+    wanted = prefix + name
     existing = [label for label in current if label.lower().startswith(prefix)]
-    add = [] if wanted in existing else [wanted]
-    remove = [label for label in existing if label != wanted]
+    add = () if wanted in existing else (wanted,)
+    remove = tuple(label for label in existing if label != wanted)
     return add, remove
 
 
-def label_changes(
-    current: Iterable[str], developer: str, reviewer: str | None
+def developer_label_changes(
+    current: Iterable[str], developer: str
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(labels to add, labels to remove) so the PR carries exactly the wanted
-    ``dev:`` label and, if there is a reviewer, the ``reviewer:`` label.
-
-    Without a reviewer an existing ``reviewer:`` label is left alone.
-    """
-    current = tuple(current)
-    add, remove = _label_changes(
-        current, DEVELOPER_PREFIX, DEVELOPER_PREFIX + developer
-    )
-    if reviewer is not None:
-        add_reviewer, remove_reviewer = _label_changes(
-            current, REVIEWER_PREFIX, REVIEWER_PREFIX + reviewer
-        )
-        add += add_reviewer
-        remove += remove_reviewer
-    return tuple(add), tuple(remove)
+    return _label_changes(current, DEVELOPER_PREFIX, developer)
 
 
 def reviewer_label_changes(
     current: Iterable[str], reviewer: str
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(labels to add, labels to remove) so ``reviewer`` is the only ``reviewer:``
-    label. Every other label, including ``dev:``, is left alone."""
-    add, remove = _label_changes(current, REVIEWER_PREFIX, REVIEWER_PREFIX + reviewer)
-    return tuple(add), tuple(remove)
+    return _label_changes(current, REVIEWER_PREFIX, reviewer)
+
+
+def label_changes(
+    current: Iterable[str], developer: str, reviewer: str | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Developer label changes plus, if there is a reviewer, reviewer label changes."""
+    current = tuple(current)
+    add, remove = developer_label_changes(current, developer)
+    if reviewer is not None:
+        add_reviewer, remove_reviewer = reviewer_label_changes(current, reviewer)
+        add += add_reviewer
+        remove += remove_reviewer
+    return add, remove
 
 
 def plan_pull_request(

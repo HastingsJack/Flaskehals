@@ -34,6 +34,7 @@ from flaskehals.specification import (
 )
 from flaskehals.task_creation_page import keep_draft_state, render_task_creation
 from flaskehals.task_overview_page import render_task_overview
+from flaskehals.task_reassignment import reassign_task_and_labels
 from flaskehals.task_services import TaskServices
 from flaskehals.tasks import (
     fetch_developer_profiles,
@@ -111,6 +112,19 @@ def _complete(config: OpenRouterConfig, messages: list[dict[str, str]]) -> str:
     return request_completion(config, messages, "recommendation")
 
 
+def reassign_task_on_github(
+    task_id: str, new_developer: str, expected_current: str
+) -> None:
+    """Re-assign the task and update the dev: label of its open pull requests."""
+    config = load_github_config()
+    if config is None:
+        raise DataStoreError(GITHUB_CONFIG_ERROR_MESSAGE)
+    with GitHubClient(config) as client:
+        neo4j_call(
+            reassign_task_and_labels, client, task_id, new_developer, expected_current
+        )
+
+
 def build_task_services() -> TaskServices:
     openrouter = load_openrouter_config()
     return TaskServices(
@@ -119,7 +133,12 @@ def build_task_services() -> TaskServices:
         load_profiles=partial(neo4j_call, fetch_developer_profiles),
         save_task=partial(neo4j_call, save_approved_task),
         load_tasks=partial(neo4j_call, fetch_tasks),
-        reassign_task=partial(neo4j_call, reassign_task),
+        reassign_task=(
+            reassign_task_on_github
+            if load_github_config()
+            else partial(neo4j_call, reassign_task)
+        ),
+        github_labels=load_github_config() is not None,
         load_recommendations=partial(neo4j_call, fetch_recommendations),
         reassign_reviewer=(
             reassign_reviewer_on_github if load_github_config() else None

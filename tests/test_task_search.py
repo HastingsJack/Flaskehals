@@ -61,7 +61,9 @@ def test_search_field_filters_overview(fakes: Fakes) -> None:  # noqa: F811
     at = go_to(open_task_page(), "Tasks")
     assert len(at.expander) == 3
     at.text_input(key="task_search").input("csv").run()
-    assert [e.label for e in at.expander] == ["CSV export - Peter"]
+    assert [e.label for e in at.expander] == [
+        "CSV export - Peter :gray-badge[\\[Approved\\]]"
+    ]
     at.text_input(key="task_search").input("").run()
     assert len(at.expander) == 3
 
@@ -89,8 +91,10 @@ def test_search_field_finds_task_by_number(fakes: Fakes) -> None:  # noqa: F811
     ]
     at = go_to(open_task_page(), "Tasks")
     assert [e.label for e in at.expander] == [
-        "Task-7 - Add login page - Hans",
-        "Task-12 - CSV export - Peter",
+        "Task-7 - Add login page - Hans :gray-badge[\\[Approved\\]]",
+        "Task-12 - CSV export - Peter :gray-badge[\\[Approved\\]]",
     ]
     at.text_input(key="task_search").input("task-7").run()
-    assert [e.label for e in at.expander] == ["Task-7 - Add login page - Hans"]
+    assert [e.label for e in at.expander] == [
+        "Task-7 - Add login page - Hans :gray-badge[\\[Approved\\]]"
+    ]

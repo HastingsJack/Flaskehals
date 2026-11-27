@@ -7,7 +7,7 @@ from conftest import TEST_PASSWORD, TEST_USERNAME
 from neo4j.exceptions import ServiceUnavailable
 from streamlit.testing.v1 import AppTest
 
-from flaskehals.developers import DeveloperOverview
+from flaskehals.developers import DeveloperOverview, MergeStats
 
 APP_PATH = str(Path(__file__).parents[1] / "src" / "flaskehals" / "app.py")
 
@@ -59,7 +59,7 @@ def test_display_all_developers_with_picture_and_name(
 
 def test_display_developer_workload(monkeypatch: pytest.MonkeyPatch) -> None:
     at = open_dashboard(monkeypatch, PEOPLE)
-    values = [(m.label, m.value) for m in at.metric]
+    values = [(m.label, m.value) for m in at.metric if "merged" not in m.label]
     assert values == [
         ("Open PRs", "2"), ("Assigned for review", "1"), ("Assigned tasks", "0"),
         ("Open PRs", "0"), ("Assigned for review", "3"), ("Assigned tasks", "0"),
@@ -71,7 +71,7 @@ def test_developer_without_work_is_shown_with_zeros(
 ) -> None:
     at = open_dashboard(monkeypatch, [DeveloperOverview("Idle", None, 0, 0, 0)])
     assert "**Idle**" in [m.value for m in at.markdown]
-    assert [m.value for m in at.metric] == ["0", "0", "0"]
+    assert [m.value for m in at.metric] == ["0"] * 7
 
 
 def test_missing_picture_shows_default_avatar(
@@ -121,4 +121,20 @@ def test_missing_neo4j_configuration_fails_securely(
 
 def test_assigned_task_count_is_displayed(monkeypatch: pytest.MonkeyPatch) -> None:
     at = open_dashboard(monkeypatch, [DeveloperOverview("Busy", None, 0, 0, 2)])
-    assert [(m.label, m.value) for m in at.metric][-1] == ("Assigned tasks", "2")
+    assert [(m.label, m.value) for m in at.metric][2] == ("Assigned tasks", "2")
+
+
+def test_merge_statistics_are_displayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    stats = MergeStats(1, 4, 2, 5)
+    at = open_dashboard(monkeypatch, [DeveloperOverview("Busy", None, 0, 0, 0, stats)])
+    assert [(m.label, m.value) for m in at.metric if "merged" in m.label] == [
+        ("Authored & merged (7d)", "1"),
+        ("Authored & merged (30d)", "4"),
+        ("Commented & merged (7d)", "2"),
+        ("Commented & merged (30d)", "5"),
+    ]
+
+
+def test_merge_statistics_default_to_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    at = open_dashboard(monkeypatch, [DeveloperOverview("Idle", None, 0, 0, 0)])
+    assert [m.value for m in at.metric if "merged" in m.label] == ["0"] * 4

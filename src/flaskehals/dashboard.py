@@ -13,6 +13,10 @@ from flaskehals.graph_view import build_agraph, graph_legend, label_color
 
 EMPTY_MESSAGE = "No developers found. Run the GitHub sync to import them."
 TASKS_NOTE = "Approved tasks assigned to this developer."
+COMMENTED_NOTE = (
+    "Merged pull requests by others that this developer commented on. "
+    "Rolling window ending now."
+)
 GRAPH_EXPANDER_LABEL = "Neo4j nodes and relationships"
 NO_CONNECTIONS_MESSAGE = "This developer has no connected nodes."
 GRAPH_NOT_FOUND_MESSAGE = "This developer was not found in Neo4j."
@@ -37,7 +41,21 @@ def render_developer_overview(
             reviews.metric("Assigned for review", developer.review_assignments)
             tasks.metric("Assigned tasks", developer.assigned_tasks, help=TASKS_NOTE)
 
+            _render_merge_stats(developer)
             _render_graph_expander(developer.name, load_graph)
+
+
+def _render_merge_stats(developer: DeveloperOverview) -> None:
+    stats = developer.merge_stats
+    cells = st.columns(4)
+    cells[0].metric("Authored & merged (7d)", stats.authored_merged_7d)
+    cells[1].metric("Authored & merged (30d)", stats.authored_merged_30d)
+    cells[2].metric(
+        "Commented & merged (7d)", stats.commented_merged_7d, help=COMMENTED_NOTE
+    )
+    cells[3].metric(
+        "Commented & merged (30d)", stats.commented_merged_30d, help=COMMENTED_NOTE
+    )
 
 
 def _render_graph_expander(name: str, load_graph: GraphLoader) -> None:

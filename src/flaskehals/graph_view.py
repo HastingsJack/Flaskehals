@@ -8,7 +8,6 @@ from streamlit_agraph import Config, Edge, Node
 
 from flaskehals.developer_graph import DeveloperGraph, GraphNode
 
-# One fixed colour per node label (similar in spirit to the Neo4j Browser).
 LABEL_COLORS: dict[str, str] = {
     "Developer": "#4C8EDA",
     "PullRequest": "#57C7E3",

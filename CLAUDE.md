@@ -55,6 +55,12 @@ Do not silently change feature requirements or implement unrelated functionality
 - Validate external input.
 - Fail securely when required configuration is missing.
 
+## Code Style
+This is a datamatiker final project, so the code must stay simple and easy to read.
+- Follow DRY, SOLID and KISS: no duplicated logic, one responsibility per module, no clever or over-engineered solutions.
+- Write only comments that explain why, never what. Keep docstrings short and skip them when the name says it all.
+- Do not add tests that only restate the implementation or mock data. Test behaviour from the Gherkin files.
+
 ## General
 - Avoid unnecessary dependencies and complexity.
 - Follow existing project conventions.

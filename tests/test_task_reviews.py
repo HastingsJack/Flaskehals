@@ -103,5 +103,7 @@ def test_tasks_still_shown_when_recommendations_cannot_be_loaded(
         "flaskehals.reviewer_recommendations.fetch_recommendations", boom
     )
     at = go_to(open_task_page(), "Tasks")
-    assert [e.label for e in at.expander] == ["Task-1 - CSV export - Hans"]
+    assert [e.label for e in at.expander] == [
+        "Task-1 - CSV export - Hans :gray-badge[\\[Approved\\]]"
+    ]
     assert not at.error

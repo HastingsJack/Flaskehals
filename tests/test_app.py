@@ -117,9 +117,6 @@ def test_existing_session_denied_if_configuration_removed(
     assert "authenticated" not in at.session_state
 
 
-# --- features/userinterface/page-navigation.feature ---
-
-
 def open_page(at: AppTest, url_path: str) -> AppTest:
     """Open a page by URL path (AppTest.switch_page only supports file pages)."""
     at._page_hash = next(

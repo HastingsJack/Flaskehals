@@ -68,7 +68,6 @@ class DeveloperGraph:
 
 
 def _property_value(value: Any) -> str | int | float | bool:
-    # Dates and other driver types are shown as text.
     return value if isinstance(value, str | int | float | bool) else str(value)
 
 

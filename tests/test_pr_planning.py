@@ -8,6 +8,7 @@ from flaskehals.models import Task
 from flaskehals.pr_planning import (
     PullRequestPlan,
     Skipped,
+    developer_label_changes,
     label_changes,
     plan_pull_request,
 )
@@ -148,3 +149,19 @@ def test_plan_carries_scores_and_reasons_for_the_task() -> None:
 
 def test_ranking_is_deterministic() -> None:
     assert plan(pr()) == plan(pr())
+
+
+def test_only_the_developer_label_changes() -> None:
+    add, remove = developer_label_changes(
+        ("dev:Hans", "reviewer:Peter", "bug"), "Maria"
+    )
+    assert (add, remove) == (("dev:Maria",), ("dev:Hans",))
+
+
+def test_a_correct_developer_label_is_left_alone() -> None:
+    assert developer_label_changes(("dev:Maria",), "Maria") == ((), ())
+
+
+def test_duplicate_developer_labels_collapse_to_one() -> None:
+    add, remove = developer_label_changes(("dev:Hans", "dev:Peter"), "Peter")
+    assert add == () and remove == ("dev:Hans",)
